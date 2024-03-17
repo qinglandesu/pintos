@@ -138,7 +138,6 @@ int pintos_init(void)
     // TODO: no command line passed to kernel. Run interactively
     size_t cmd_maxlen = 16;                 // 设置命令行最大长度
     char *cmd = (char *)malloc(cmd_maxlen); // 分配命令行输入缓冲区
-
     while (true)
     {
       printf("PKUOS> ");
@@ -166,7 +165,6 @@ int pintos_init(void)
           printf("%c", c);  // 回显字符
         }
       }
-
       // 处理命令
       if (strcmp(cmd, "whoami") == 0) // whoami
       {
@@ -181,7 +179,6 @@ int pintos_init(void)
         printf("invalid command\n");
       }
     }
-
     free(cmd); // 释放命令行输入缓冲区
     printf("shell terminated.\n");
   }
