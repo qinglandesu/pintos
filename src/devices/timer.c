@@ -7,6 +7,8 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
+#include <list.h>
 
 /** See [8254] for hardware details of the 8254 timer chip. */
 
@@ -24,13 +26,14 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
-struct sleeped_thread // 睡眠线程
+struct sleeping_thread // 睡眠线程
 {
   struct list_elem elem; // 构建list所需
   struct thread *t;
   int64_t sleep_ticks; // 剩余ticks
 };
-static struct list sleeped_thread_list; // 睡眠线程list
+static struct list sleeping_thread_list; // 睡眠线程list
+static struct list free_list;            // 需要free的list
 
 static intr_handler_func timer_interrupt;
 static bool too_many_loops(unsigned loops);
@@ -44,7 +47,8 @@ void timer_init(void)
 {
   pit_configure_channel(0, 2, TIMER_FREQ);
   intr_register_ext(0x20, timer_interrupt, "8254 Timer");
-  list_init(&sleeped_thread_list);
+  list_init(&sleeping_thread_list);
+  list_init(&free_list);
 }
 
 /** Calibrates loops_per_tick, used to implement brief delays. */
@@ -100,28 +104,42 @@ void timer_sleep(int64_t ticks)
 
   enum intr_level old_level = intr_disable();
 
-  struct sleeped_thread *st = (struct sleeped_thread *)malloc(sizeof(struct sleeped_thread));
+  // 清空free_list
+  struct sleeping_thread *st;
+  struct list_elem *e = list_begin(&free_list);
+  struct list_elem *end = list_end(&free_list);
+  while (e != end)
+  {
+    st = list_entry(e, struct sleeping_thread, elem);
+    e = list_remove(e);
+    free(st);
+  }
+
+  // 新建一个sleeping_thread加入list后block
+  st = (struct sleeping_thread *)malloc(sizeof(struct sleeping_thread));
   st->t = thread_current();
   st->sleep_ticks = ticks;
-  list_push_back(&sleeped_thread_list, &st->elem);
+  list_push_back(&sleeping_thread_list, &st->elem);
   thread_block();
 
   intr_set_level(old_level);
 }
 
 // 更新list中每个sleep_tick
-static void
-update_ticks(void)
+static void update_ticks(void)
 {
-  struct list_elem *e = list_begin(&sleeped_thread_list);
-  while (e != list_end(&sleeped_thread_list))
+  struct sleeping_thread *st;
+  struct list_elem *e = list_begin(&sleeping_thread_list);
+  struct list_elem *end = list_end(&sleeping_thread_list);
+  while (e != end)
   {
-    struct sleeped_thread *st = list_entry(e, struct sleeped_thread, elem);
+    st = list_entry(e, struct sleeping_thread, elem);
     st->sleep_ticks--;        // 剩余ticks-1
     if (st->sleep_ticks <= 0) // 可以唤醒
     {
       e = list_remove(e);
       thread_unblock(st->t);
+      list_push_back(&free_list, &st->elem); // 本来想在此处free发现不行只能用这种方法了
     }
     else
       e = list_next(e);
