@@ -70,7 +70,6 @@ static void *alloc_frame(struct thread *, size_t size);
 static void schedule(void);
 void thread_schedule_tail(struct thread *prev);
 static tid_t allocate_tid(void);
-static bool thread_priority_cmp(const struct list_elem *e1, const struct list_elem *e2, void *aux UNUSED);
 
 /** Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -330,10 +329,29 @@ void thread_foreach(thread_action_func *func, void *aux)
 }
 
 /** Sets the current thread's priority to NEW_PRIORITY. */
+// void thread_set_priority(int new_priority)
+//{
+//   thread_current()->priority = new_priority;
+//   thread_yield();
+// }
 void thread_set_priority(int new_priority)
 {
-  thread_current()->priority = new_priority;
-  thread_yield();
+  if (thread_mlfqs)
+    return;
+
+  enum intr_level old_level = intr_disable();
+
+  struct thread *t = thread_current();
+  t->original_priority = new_priority;
+  int old_priority = t->priority;
+  if (old_priority < new_priority)
+    t->priority = new_priority;
+  else if (old_priority > new_priority)
+    t->priority = t->donation > new_priority ? t->donation : new_priority;
+  if (t->priority < old_priority)
+    thread_yield();
+
+  intr_set_level(old_level);
 }
 
 /** Returns the current thread's priority. */
@@ -455,6 +473,10 @@ init_thread(struct thread *t, const char *name, int priority)
   strlcpy(t->name, name, sizeof t->name);
   t->stack = (uint8_t *)t + PGSIZE;
   t->priority = priority;
+  t->original_priority = priority;
+  t->donation = PRI_MIN;
+  list_init(&t->holding);
+  t->waiting = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable();
@@ -486,7 +508,10 @@ next_thread_to_run(void)
   if (list_empty(&ready_list))
     return idle_thread;
   else
+  {
+    list_sort(&ready_list, thread_priority_cmp, NULL);
     return list_entry(list_pop_front(&ready_list), struct thread, elem);
+  }
 }
 
 /** Completes a thread switch by activating the new thread's page
