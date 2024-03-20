@@ -58,6 +58,7 @@ static unsigned thread_ticks; /**< # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+fixed_t load_avg;
 
 static void kernel_thread(thread_func *, void *aux);
 
@@ -107,6 +108,7 @@ void thread_start(void)
   struct semaphore idle_started;
   sema_init(&idle_started, 0);
   thread_create("idle", PRI_MIN, idle, &idle_started);
+  load_avg = FP_CONVERT(0);
 
   /* Start preemptive thread scheduling. */
   intr_enable();
@@ -371,28 +373,27 @@ int thread_get_priority(void)
 /** Sets the current thread's nice value to NICE. */
 void thread_set_nice(int nice UNUSED)
 {
-  /* Not yet implemented. */
+  thread_current()->nice = nice;
+  thread_mlfqs_update_priority(thread_current());
+  thread_yield();
 }
 
 /** Returns the current thread's nice value. */
 int thread_get_nice(void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current()->nice;
 }
 
 /** Returns 100 times the system load average. */
 int thread_get_load_avg(void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_INT_ROUND(FP_MUL_MIX(load_avg, 100));
 }
 
 /** Returns 100 times the current thread's recent_cpu value. */
 int thread_get_recent_cpu(void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_INT_ROUND(FP_MUL_MIX(thread_current()->recent_cpu, 100));
 }
 
 /** Idle thread.  Executes when no other thread is ready to run.
@@ -484,6 +485,8 @@ init_thread(struct thread *t, const char *name, int priority)
   t->original_priority = priority;
   list_init(&t->holding);
   t->waiting = NULL;
+  t->nice = 0;
+  t->recent_cpu = FP_CONVERT(0);
   t->magic = THREAD_MAGIC;
   old_level = intr_disable();
   list_insert_ordered(&all_list, &t->allelem, (list_less_func *)&thread_priority_cmp, NULL);
@@ -605,3 +608,53 @@ allocate_tid(void)
 /** Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof(struct thread, stack);
+
+/* Increase recent_cpu by 1. */
+void thread_mlfqs_increase_recent_cpu(void)
+{
+  ASSERT(thread_mlfqs);
+  ASSERT(intr_context());
+
+  struct thread *t = thread_current();
+  if (t == idle_thread)
+    return;
+  t->recent_cpu = FP_ADD_MIX(t->recent_cpu, 1);
+}
+
+/* Update load_avg and recent_cpu of all threads every second. */
+void thread_mlfqs_update_per_second(void)
+{
+  ASSERT(thread_mlfqs);
+  ASSERT(intr_context());
+
+  size_t ready_threads_count = list_size(&ready_list);
+  if (thread_current() != idle_thread)
+    ready_threads_count++;
+  load_avg = FP_ADD(FP_DIV_MIX(FP_MUL_MIX(load_avg, 59), 60), FP_DIV_MIX(FP_CONVERT(ready_threads_count), 60));
+
+  struct thread *t;
+  struct list_elem *e;
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e))
+  {
+    t = list_entry(e, struct thread, allelem);
+    if (t != idle_thread)
+    {
+      t->recent_cpu = FP_ADD_MIX(FP_MUL(FP_DIV(FP_MUL_MIX(load_avg, 2), FP_ADD_MIX(FP_MUL_MIX(load_avg, 2), 1)), t->recent_cpu), t->nice);
+      thread_mlfqs_update_priority(t);
+    }
+  }
+}
+
+/* Update priority.(mlfqs) */
+void thread_mlfqs_update_priority(struct thread *t)
+{
+  if (t == idle_thread)
+    return;
+
+  ASSERT(thread_mlfqs);
+  ASSERT(t != idle_thread);
+
+  t->priority = FP_INT_ZERO(FP_SUB_MIX(FP_SUB(FP_CONVERT(PRI_MAX), FP_DIV_MIX(t->recent_cpu, 4)), 2 * t->nice));
+  t->priority = t->priority < PRI_MIN ? PRI_MIN : t->priority;
+  t->priority = t->priority > PRI_MAX ? PRI_MAX : t->priority;
+}

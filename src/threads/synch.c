@@ -200,7 +200,7 @@ void lock_acquire(struct lock *lock)
   struct thread *t = thread_current();
   struct lock *l;
   // 检查lock是否被持有，持有的话进行链式捐赠。
-  if (lock->holder != NULL)
+  if (lock->holder != NULL && !thread_mlfqs)
   {
     t->waiting = lock;
     l = lock;
@@ -214,10 +214,13 @@ void lock_acquire(struct lock *lock)
 
   sema_down(&lock->semaphore);
 
-  t->waiting = NULL;
-  lock->priority = t->priority;
+  if (!thread_mlfqs)
+  {
+    t->waiting = NULL;
+    lock->priority = t->priority;
+    list_insert_ordered(&t->holding, &lock->elem, lock_priority_cmp, NULL);
+  }
   lock->holder = thread_current();
-  list_insert_ordered(&t->holding, &lock->elem, lock_priority_cmp, NULL);
 
   intr_set_level(old_level);
 }
@@ -253,10 +256,13 @@ void lock_release(struct lock *lock)
 
   enum intr_level old_level = intr_disable();
 
-  list_remove(&lock->elem);
   lock->holder = NULL;
   sema_up(&lock->semaphore);
-  thread_update_priority(thread_current());
+  if (!thread_mlfqs)
+  {
+    list_remove(&lock->elem);
+    thread_update_priority(thread_current());
+  }
 
   intr_set_level(old_level);
 }

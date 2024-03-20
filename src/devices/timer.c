@@ -125,7 +125,7 @@ void timer_sleep(int64_t ticks)
   intr_set_level(old_level);
 }
 
-// 更新list中每个sleep_tick
+// 更新list中每个sleep_ticks
 static void update_ticks(void)
 {
   struct sleeping_thread *st;
@@ -216,6 +216,14 @@ timer_interrupt(struct intr_frame *args UNUSED)
   ticks++;
   update_ticks();
   thread_tick();
+  if (thread_mlfqs)
+  {
+    thread_mlfqs_increase_recent_cpu();
+    if (ticks % TIMER_FREQ == 0)
+      thread_mlfqs_update_per_second();
+    else if (ticks % 4 == 0)
+      thread_mlfqs_update_priority(thread_current());
+  }
 }
 
 /** Returns true if LOOPS iterations waits for more than one timer
