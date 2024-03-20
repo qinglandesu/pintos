@@ -194,11 +194,11 @@ void lock_acquire(struct lock *lock)
   ASSERT(lock != NULL);
   ASSERT(!intr_context());
   ASSERT(!lock_held_by_current_thread(lock));
-  struct thread *t = thread_current();
-  struct lock *l;
 
   enum intr_level old_level = intr_disable();
 
+  struct thread *t = thread_current();
+  struct lock *l;
   // 检查lock是否被持有，持有的话进行链式捐赠。
   if (lock->holder != NULL)
   {
@@ -251,30 +251,12 @@ void lock_release(struct lock *lock)
   ASSERT(lock != NULL);
   ASSERT(lock_held_by_current_thread(lock));
 
-  struct thread *t = thread_current();
-
   enum intr_level old_level = intr_disable();
 
   list_remove(&lock->elem);
-  int old_priority = t->priority;
-  // 更新priority
-  if (!list_empty(&t->holding))
-  {
-    list_sort(&(t->holding), lock_priority_cmp, NULL);
-    int lock_priority = (list_entry(list_front(&t->holding), struct lock, elem))->priority;
-    if (lock_priority > t->original_priority)
-      t->priority = lock_priority;
-    else
-      t->priority = t->original_priority;
-  }
-  else // 不持有锁了，重置
-  {
-    t->priority = t->original_priority;
-  }
   lock->holder = NULL;
   sema_up(&lock->semaphore);
-  if (t->priority < old_priority)
-    thread_yield();
+  thread_update_priority(thread_current());
 
   intr_set_level(old_level);
 }

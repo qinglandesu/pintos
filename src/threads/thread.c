@@ -338,17 +338,24 @@ void thread_set_priority(int new_priority)
 
   struct thread *t = thread_current();
   t->original_priority = new_priority;
+  thread_update_priority(t);
+
+  intr_set_level(old_level);
+}
+
+/** Updates the current thread's priority. */
+void thread_update_priority(struct thread *t)
+{
+  enum intr_level old_level = intr_disable();
+
   int old_priority = t->priority;
   int lock_priority = PRI_MIN;
-  if (old_priority < new_priority)
-    t->priority = new_priority;
   if (!list_empty(&t->holding))
   {
     list_sort(&(t->holding), lock_priority_cmp, NULL);
     lock_priority = (list_entry(list_front(&t->holding), struct lock, elem))->priority;
   }
-  else if (old_priority > new_priority)
-    t->priority = lock_priority > new_priority ? lock_priority : new_priority;
+  t->priority = lock_priority > t->original_priority ? lock_priority : t->original_priority;
   if (t->priority < old_priority)
     thread_yield();
 
