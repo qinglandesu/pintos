@@ -329,11 +329,6 @@ void thread_foreach(thread_action_func *func, void *aux)
 }
 
 /** Sets the current thread's priority to NEW_PRIORITY. */
-// void thread_set_priority(int new_priority)
-//{
-//   thread_current()->priority = new_priority;
-//   thread_yield();
-// }
 void thread_set_priority(int new_priority)
 {
   if (thread_mlfqs)
@@ -344,10 +339,16 @@ void thread_set_priority(int new_priority)
   struct thread *t = thread_current();
   t->original_priority = new_priority;
   int old_priority = t->priority;
+  int lock_priority = PRI_MIN;
   if (old_priority < new_priority)
     t->priority = new_priority;
+  if (!list_empty(&t->holding))
+  {
+    list_sort(&(t->holding), lock_priority_cmp, NULL);
+    lock_priority = (list_entry(list_front(&t->holding), struct lock, elem))->priority;
+  }
   else if (old_priority > new_priority)
-    t->priority = t->donation > new_priority ? t->donation : new_priority;
+    t->priority = lock_priority > new_priority ? lock_priority : new_priority;
   if (t->priority < old_priority)
     thread_yield();
 
@@ -474,11 +475,9 @@ init_thread(struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *)t + PGSIZE;
   t->priority = priority;
   t->original_priority = priority;
-  t->donation = PRI_MIN;
   list_init(&t->holding);
   t->waiting = NULL;
   t->magic = THREAD_MAGIC;
-
   old_level = intr_disable();
   list_insert_ordered(&all_list, &t->allelem, (list_less_func *)&thread_priority_cmp, NULL);
   intr_set_level(old_level);

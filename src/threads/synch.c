@@ -208,7 +208,6 @@ void lock_acquire(struct lock *lock)
     {
       l->priority = t->priority;
       l->holder->priority = t->priority > l->holder->priority ? t->priority : l->holder->priority;
-      l->holder->donation = t->priority > l->holder->donation ? t->priority : l->holder->donation;
       l = l->holder->waiting;
     }
   }
@@ -219,7 +218,7 @@ void lock_acquire(struct lock *lock)
   lock->priority = t->priority;
   lock->holder = thread_current();
   list_insert_ordered(&t->holding, &lock->elem, lock_priority_cmp, NULL);
-  
+
   intr_set_level(old_level);
 }
 
@@ -253,23 +252,29 @@ void lock_release(struct lock *lock)
   ASSERT(lock_held_by_current_thread(lock));
 
   struct thread *t = thread_current();
-  
+
   enum intr_level old_level = intr_disable();
 
   list_remove(&lock->elem);
-  // 改变t->donation
+  int old_priority = t->priority;
+  // 更新priority
   if (!list_empty(&t->holding))
   {
     list_sort(&(t->holding), lock_priority_cmp, NULL);
-    t->donation = (list_entry(list_front(&t->holding), struct lock, elem))->priority;
+    int lock_priority = (list_entry(list_front(&t->holding), struct lock, elem))->priority;
+    if (lock_priority > t->original_priority)
+      t->priority = lock_priority;
+    else
+      t->priority = t->original_priority;
   }
-  else// 不持有锁了，重置donation
+  else // 不持有锁了，重置
   {
-    t->donation = PRI_MIN;
+    t->priority = t->original_priority;
   }
   lock->holder = NULL;
   sema_up(&lock->semaphore);
-  thread_set_priority(t->original_priority);
+  if (t->priority < old_priority)
+    thread_yield();
 
   intr_set_level(old_level);
 }

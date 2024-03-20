@@ -89,7 +89,6 @@ struct thread
    uint8_t *stack;            /**< Saved stack pointer. */
    int priority;              /**< Priority. */
    int original_priority;     /**< 初始优先级 */
-   int donation;
    struct list holding;       /**< 持有的锁 */
    struct lock *waiting;      /**< 等待的锁 */
    struct list_elem allelem;  /**< List element for all threads list. */
