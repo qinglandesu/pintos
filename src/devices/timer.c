@@ -222,7 +222,7 @@ timer_interrupt(struct intr_frame *args UNUSED)
     if (ticks % TIMER_FREQ == 0)
       thread_mlfqs_update_per_second();
     else if (ticks % 4 == 0)
-      thread_mlfqs_update_priority(thread_current());
+      thread_mlfqs_update_4ticks();
   }
 }
 

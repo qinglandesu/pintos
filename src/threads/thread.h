@@ -146,6 +146,7 @@ int thread_get_load_avg(void);
 void thread_update_priority(struct thread *t);
 void thread_mlfqs_increase_recent_cpu(void);
 void thread_mlfqs_update_per_second(void);
+void thread_mlfqs_update_4ticks(void);
 void thread_mlfqs_update_priority(struct thread *t);
 bool thread_priority_cmp(const struct list_elem *e1, const struct list_elem *e2, void *aux);
 

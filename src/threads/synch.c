@@ -263,7 +263,8 @@ void lock_release(struct lock *lock)
     list_remove(&lock->elem);
     thread_update_priority(thread_current());
   }
-
+  if (thread_mlfqs)
+    thread_yield();
   intr_set_level(old_level);
 }
 

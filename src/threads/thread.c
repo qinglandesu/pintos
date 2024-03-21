@@ -177,7 +177,25 @@ tid_t thread_create(const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread(t, name, priority);
+  if (thread_mlfqs)
+  {
+    init_thread(t, name, PRI_DEFAULT);
+    if (strcmp(name, "idle") == 0)
+    {
+      t->nice = 0;
+      t->recent_cpu = 0;
+      t->priority = PRI_MIN;
+    }
+    else
+    {
+      t->nice = thread_current()->nice;
+      t->recent_cpu = thread_current()->recent_cpu;
+    }
+  }
+  else
+  {
+    init_thread(t, name, priority);
+  }
   tid = t->tid = allocate_tid();
 
   /* Stack frame for kernel_thread(). */
@@ -375,6 +393,7 @@ void thread_set_nice(int nice UNUSED)
 {
   thread_current()->nice = nice;
   thread_mlfqs_update_priority(thread_current());
+  list_sort(&ready_list, thread_priority_cmp, NULL);
   thread_yield();
 }
 
@@ -518,7 +537,8 @@ next_thread_to_run(void)
     return idle_thread;
   else
   {
-    list_sort(&ready_list, thread_priority_cmp, NULL);
+    if (!thread_mlfqs)
+      list_sort(&ready_list, thread_priority_cmp, NULL);
     return list_entry(list_pop_front(&ready_list), struct thread, elem);
   }
 }
@@ -631,7 +651,7 @@ void thread_mlfqs_update_per_second(void)
   if (thread_current() != idle_thread)
     ready_threads_count++;
   load_avg = FP_ADD(FP_DIV_MIX(FP_MUL_MIX(load_avg, 59), 60), FP_DIV_MIX(FP_CONVERT(ready_threads_count), 60));
-
+  // printf("current:%s\n",thread_current()->name);
   struct thread *t;
   struct list_elem *e;
   for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e))
@@ -641,8 +661,27 @@ void thread_mlfqs_update_per_second(void)
     {
       t->recent_cpu = FP_ADD_MIX(FP_MUL(FP_DIV(FP_MUL_MIX(load_avg, 2), FP_ADD_MIX(FP_MUL_MIX(load_avg, 2), 1)), t->recent_cpu), t->nice);
       thread_mlfqs_update_priority(t);
+      // printf("%s,%d,%d\n",t->name,t->priority,FP_INT_ZERO(t->recent_cpu));
     }
   }
+  list_sort(&ready_list, thread_priority_cmp, NULL);
+}
+
+/* Update load_avg and recent_cpu of all threads every 4 ticks. */
+void thread_mlfqs_update_4ticks(void)
+{
+  ASSERT(thread_mlfqs);
+  ASSERT(intr_context());
+
+  struct thread *t;
+  struct list_elem *e;
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e))
+  {
+    t = list_entry(e, struct thread, allelem);
+    if (t != idle_thread)
+      thread_mlfqs_update_priority(t);
+  }
+  list_sort(&ready_list, thread_priority_cmp, NULL);
 }
 
 /* Update priority.(mlfqs) */
