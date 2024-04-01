@@ -3,7 +3,7 @@
 
 /* Basic definitions of fixed point. */
 typedef int fixed_t;
-/* 16 LSB used for fractional part. */
+/* 14 LSB used for fractional part. */
 #define FP_SHIFT_AMOUNT 14
 /*x and y are fixed-point numbers, n is an integer.*/
 /* Convert n to fixed-point. */
@@ -11,8 +11,9 @@ typedef int fixed_t;
 /* Convert x to integer (rounding toward zero). */
 #define FP_INT_ZERO(x) ((x) >> FP_SHIFT_AMOUNT)
 /* Convert x to integer (rounding to nearest). */
-#define FP_INT_ROUND(x) ((x) >= 0 ? (((x) + (1 << (FP_SHIFT_AMOUNT - 1))) >> FP_SHIFT_AMOUNT) \
-                                  : (((x) - (1 << (FP_SHIFT_AMOUNT - 1))) >> FP_SHIFT_AMOUNT))
+#define FP_INT_ROUND(x)                                                   \
+    ((x) >= 0 ? (((x) + (1 << (FP_SHIFT_AMOUNT - 1))) >> FP_SHIFT_AMOUNT) \
+              : (((x) - (1 << (FP_SHIFT_AMOUNT - 1))) >> FP_SHIFT_AMOUNT))
 /* Add x and y. */
 #define FP_ADD(x, y) ((x) + (y))
 /* Add x and n. */

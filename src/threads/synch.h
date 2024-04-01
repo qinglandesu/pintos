@@ -43,8 +43,10 @@ void cond_wait(struct condition *, struct lock *);
 void cond_signal(struct condition *, struct lock *);
 void cond_broadcast(struct condition *, struct lock *);
 
-bool cond_priority_cmp(const struct list_elem *e1, const struct list_elem *e2, void *aux);
-bool lock_priority_cmp(const struct list_elem *e1, const struct list_elem *e2, void *aux);
+bool cond_priority_cmp(const struct list_elem *e1,
+                       const struct list_elem *e2, void *aux);
+bool lock_priority_cmp(const struct list_elem *e1,
+                       const struct list_elem *e2, void *aux);
 /** Optimization barrier.
 
    The compiler will not reorder operations across an

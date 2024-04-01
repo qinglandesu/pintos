@@ -237,9 +237,11 @@ void thread_block(void)
 }
 
 /* priority compare function. */
-bool thread_priority_cmp(const struct list_elem *e1, const struct list_elem *e2, void *aux UNUSED)
+bool thread_priority_cmp(const struct list_elem *e1,
+                         const struct list_elem *e2, void *aux UNUSED)
 {
-  return list_entry(e1, struct thread, elem)->priority > list_entry(e2, struct thread, elem)->priority;
+  return list_entry(e1, struct thread, elem)->priority >
+         list_entry(e2, struct thread, elem)->priority;
 }
 
 /** Transitions a blocked thread T to the ready-to-run state.
@@ -258,7 +260,8 @@ void thread_unblock(struct thread *t)
 
   old_level = intr_disable();
   ASSERT(t->status == THREAD_BLOCKED);
-  list_insert_ordered(&ready_list, &t->elem, (list_less_func *)&thread_priority_cmp, NULL);
+  list_insert_ordered(&ready_list, &t->elem,
+                      (list_less_func *)&thread_priority_cmp, NULL);
   t->status = THREAD_READY;
   intr_set_level(old_level);
 }
@@ -326,7 +329,8 @@ void thread_yield(void)
 
   old_level = intr_disable();
   if (cur != idle_thread)
-    list_insert_ordered(&ready_list, &cur->elem, (list_less_func *)&thread_priority_cmp, NULL);
+    list_insert_ordered(&ready_list, &cur->elem,
+                        (list_less_func *)&thread_priority_cmp, NULL);
   cur->status = THREAD_READY;
   schedule();
   intr_set_level(old_level);
@@ -373,9 +377,14 @@ void thread_update_priority(struct thread *t)
   if (!list_empty(&t->holding))
   {
     list_sort(&(t->holding), lock_priority_cmp, NULL);
-    lock_priority = (list_entry(list_front(&t->holding), struct lock, elem))->priority;
+    lock_priority = (list_entry(list_front(&t->holding),
+                                struct lock, elem))
+                        ->priority;
   }
-  t->priority = lock_priority > t->original_priority ? lock_priority : t->original_priority;
+  t->priority = lock_priority >
+                        t->original_priority
+                    ? lock_priority
+                    : t->original_priority;
   if (t->priority < old_priority)
     thread_yield();
 
@@ -508,7 +517,8 @@ init_thread(struct thread *t, const char *name, int priority)
   t->recent_cpu = FP_CONVERT(0);
   t->magic = THREAD_MAGIC;
   old_level = intr_disable();
-  list_insert_ordered(&all_list, &t->allelem, (list_less_func *)&thread_priority_cmp, NULL);
+  list_insert_ordered(&all_list, &t->allelem,
+                      (list_less_func *)&thread_priority_cmp, NULL);
   intr_set_level(old_level);
 }
 
@@ -650,8 +660,8 @@ void thread_mlfqs_update_per_second(void)
   size_t ready_threads_count = list_size(&ready_list);
   if (thread_current() != idle_thread)
     ready_threads_count++;
-  load_avg = FP_ADD(FP_DIV_MIX(FP_MUL_MIX(load_avg, 59), 60), FP_DIV_MIX(FP_CONVERT(ready_threads_count), 60));
-  // printf("current:%s\n",thread_current()->name);
+  load_avg = FP_ADD(FP_DIV_MIX(FP_MUL_MIX(load_avg, 59), 60),
+                    FP_DIV_MIX(FP_CONVERT(ready_threads_count), 60));
   struct thread *t;
   struct list_elem *e;
   for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e))
@@ -659,9 +669,13 @@ void thread_mlfqs_update_per_second(void)
     t = list_entry(e, struct thread, allelem);
     if (t != idle_thread)
     {
-      t->recent_cpu = FP_ADD_MIX(FP_MUL(FP_DIV(FP_MUL_MIX(load_avg, 2), FP_ADD_MIX(FP_MUL_MIX(load_avg, 2), 1)), t->recent_cpu), t->nice);
+      t->recent_cpu = FP_ADD_MIX(FP_MUL(FP_DIV(FP_MUL_MIX(load_avg, 2),
+                                               FP_ADD_MIX(FP_MUL_MIX(load_avg,
+                                                                     2),
+                                                          1)),
+                                        t->recent_cpu),
+                                 t->nice);
       thread_mlfqs_update_priority(t);
-      // printf("%s,%d,%d\n",t->name,t->priority,FP_INT_ZERO(t->recent_cpu));
     }
   }
   list_sort(&ready_list, thread_priority_cmp, NULL);
@@ -693,7 +707,9 @@ void thread_mlfqs_update_priority(struct thread *t)
   ASSERT(thread_mlfqs);
   ASSERT(t != idle_thread);
 
-  t->priority = FP_INT_ZERO(FP_SUB_MIX(FP_SUB(FP_CONVERT(PRI_MAX), FP_DIV_MIX(t->recent_cpu, 4)), 2 * t->nice));
+  t->priority = FP_INT_ZERO(FP_SUB_MIX(FP_SUB(FP_CONVERT(PRI_MAX),
+                                              FP_DIV_MIX(t->recent_cpu, 4)),
+                                       2 * t->nice));
   t->priority = t->priority < PRI_MIN ? PRI_MIN : t->priority;
   t->priority = t->priority > PRI_MAX ? PRI_MAX : t->priority;
 }

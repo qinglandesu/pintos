@@ -139,7 +139,8 @@ static void update_ticks(void)
     {
       e = list_remove(e);
       thread_unblock(st->t);
-      list_push_back(&free_list, &st->elem); // 本来想在此处free发现不行只能用这种方法了
+      list_push_back(&free_list, &st->elem); 
+      // 本来想在此处free发现不行只能用这种方法了
     }
     else
       e = list_next(e);
