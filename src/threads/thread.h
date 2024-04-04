@@ -101,6 +101,7 @@ struct thread
 #ifdef USERPROG
    /* Owned by userprog/process.c. */
    uint32_t *pagedir; /**< Page directory. */
+   int exit_code;     /**< exit_code. */
 #endif
 
    /* Owned by thread.c. */
@@ -150,5 +151,7 @@ void thread_mlfqs_update_4ticks(void);
 void thread_mlfqs_update_priority(struct thread *t);
 bool thread_priority_cmp(const struct list_elem *e1,
                          const struct list_elem *e2, void *aux);
+
+int thread_dead(tid_t tid);
 
 #endif /**< threads/thread.h */

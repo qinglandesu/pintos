@@ -76,16 +76,15 @@ static void start_process(void *file_name_)
   }
   else
   {
+    // get args
     int argc = 0;
-    char* argv[100]; 
-
-    if_.esp = PHYS_BASE;
-
+    char *argv[100];
     for (; fn != NULL; fn = strtok_r(NULL, " ", &save_ptr))
     {
       argv[argc] = fn;
       argc++;
     }
+    if_.esp = PHYS_BASE;
 
     /* argv[i][...] */
     for (int i = argc - 1; i >= 0; i--)
@@ -125,9 +124,6 @@ static void start_process(void *file_name_)
     *(uint32_t *)(if_.esp) = 0;
 
     free(file_name);
-
-    //printf("STACK SET. ESP: %p\n", if_.esp);
-    //hex_dump((uintptr_t)if_.esp, if_.esp, 64, true);
   }
 
   /* Start the user process by simulating a return from an
@@ -151,6 +147,12 @@ static void start_process(void *file_name_)
    does nothing. */
 int process_wait(tid_t child_tid UNUSED)
 {
+  while (1)
+  {
+    thread_yield();
+    if (thread_dead(child_tid))
+      break;
+  }
   return -1;
 }
 
@@ -160,6 +162,7 @@ void process_exit(void)
   struct thread *cur = thread_current();
   uint32_t *pd;
 
+  printf("%s: exit(%d)\n", cur->name, cur->exit_code);
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
