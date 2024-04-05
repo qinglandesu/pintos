@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "fixed_point.h"
+#include "threads/synch.h"
 
 /** States in a thread's life cycle. */
 enum thread_status
@@ -100,12 +101,28 @@ struct thread
 
 #ifdef USERPROG
    /* Owned by userprog/process.c. */
-   uint32_t *pagedir; /**< Page directory. */
-   int exit_code;     /**< exit_code. */
+   uint32_t *pagedir;             /**< Page directory. */
+   int exit_code;                 /**< exit_code. */
+   struct list child_list;        /**< List of children. */
+   struct child_thread *as_child; /**< 本身作为子进程的记录 */
+   struct semaphore execute_sema; /**< semaphore for execute */
+   bool start_success;            /**< 子进程是否成功load */
+   bool create_process;         /**< 告诉thread_create是否在创建process */
+
 #endif
 
    /* Owned by thread.c. */
    unsigned magic; /**< Detects stack overflow. */
+};
+
+struct child_thread
+{
+   tid_t tid;                  /**< Child's tid. */
+   struct thread *t;           /**< Pointer to child. NULL when dead*/
+   struct thread *parent;      /**< Thread's parent. */
+   int exit_code;              /**< Child's exit code. */
+   struct semaphore wait_sema; /**< Semaphore to let parent wait on the child. */
+   struct list_elem elem;
 };
 
 /** If false (default), use round-robin scheduler.

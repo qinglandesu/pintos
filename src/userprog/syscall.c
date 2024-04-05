@@ -3,6 +3,8 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
+#include "devices/shutdown.h"
 
 static void syscall_handler(struct intr_frame *);
 
@@ -97,8 +99,16 @@ static void sys_write(struct intr_frame *f)
     f->eax = size;
   }
 }
-static void sys_exec(struct intr_frame *f) {}
-static void sys_wait(struct intr_frame *f) {}
+static void sys_exec(struct intr_frame *f)
+{
+  char *cmd = *(char **)(f->esp + sizeof(uint32_t));
+  f->eax = process_execute(cmd);
+}
+static void sys_wait(struct intr_frame *f)
+{
+  int pid = *(int *)(f->esp + sizeof(uint32_t));
+  f->eax = process_wait(pid);
+}
 static void sys_create(struct intr_frame *f) {}
 static void sys_remove(struct intr_frame *f) {}
 static void sys_open(struct intr_frame *f) {}

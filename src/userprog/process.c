@@ -43,11 +43,23 @@ tid_t process_execute(const char *file_name)
   char *save_ptr;
   fn_copy_ = strtok_r(fn_copy_, " ", &save_ptr); // 文件名
 
+  struct thread *t = thread_current();
+  sema_init(&t->execute_sema, 0);
+  t->create_process = true;
+  t->start_success = false;
+
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create(fn_copy_, PRI_DEFAULT, start_process, fn_copy);
   free(fn_copy_);
+
   if (tid == TID_ERROR) // 创建失败，释放空间
     free(fn_copy);
+  else
+    sema_down(&t->execute_sema);
+
+  if (!t->start_success)
+    tid = -1;
+  t->create_process = false;
   return tid;
 }
 
@@ -68,14 +80,21 @@ static void start_process(void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load(fn, &if_.eip, &if_.esp);
 
+  struct thread *t = thread_current();
+  struct thread *parent = t->as_child->parent;
   /* If load failed, quit. */
   if (!success)
   {
     free(file_name);
+    sema_up(&parent->execute_sema);
+    thread_current()->exit_code = -1;
     thread_exit();
   }
-  else
+  else // success
   {
+    parent->start_success = true;
+    sema_up(&parent->execute_sema);
+
     // get args
     int argc = 0;
     char *argv[100];
@@ -147,13 +166,25 @@ static void start_process(void *file_name_)
    does nothing. */
 int process_wait(tid_t child_tid UNUSED)
 {
-  while (1)
+  struct thread *t = thread_current();
+  struct list_elem *e = list_begin(&t->child_list);
+  struct child_thread *child;
+  int ret_ = -1;
+  for (; e != list_end(&t->child_list); e = list_next(e))
   {
-    thread_yield();
-    if (thread_dead(child_tid))
+    child = list_entry(e, struct child_thread, elem);
+    if (child->tid == child_tid)
+    {
+      if (child->t != NULL)           // child还没死
+        sema_down(&child->wait_sema); // 等待
+      // child died
+      ret_ = child->exit_code;
+      list_remove(e);
+      free(child);
       break;
+    }
   }
-  return -1;
+  return ret_;
 }
 
 /** Free the current process's resources. */
@@ -525,4 +556,37 @@ install_page(void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page(t->pagedir, upage) == NULL &&
           pagedir_set_page(t->pagedir, upage, kpage, writable));
+}
+
+void process_die()
+{
+  struct thread *t = thread_current();
+  struct list_elem *e = list_begin(&t->child_list);
+  struct list_elem *next;
+  struct child_thread *child;
+  // 通知child_list里的child thread
+  while (e != list_end(&t->child_list))
+  {
+    next = list_next(e);
+    child = list_entry(e, struct child_thread, elem);
+    // 子进程还活着，要把它的as_child设为NULL，“自力更生”
+    if (child->t != NULL)
+    {
+      child->t->as_child = NULL;
+    }
+    free(child);
+    e = next;
+  }
+  // 处理自己的
+  if (t->as_child != NULL) // 父进程还在
+  {
+    ASSERT(t->as_child->parent != NULL);
+    t->as_child->t = NULL;
+    t->as_child->exit_code = t->exit_code;
+    sema_up(&t->as_child->wait_sema);
+  }
+  else // 父进程死了
+  {
+    free(t->as_child);
+  }
 }

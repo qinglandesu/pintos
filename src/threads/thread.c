@@ -198,6 +198,19 @@ tid_t thread_create(const char *name, int priority,
   }
   tid = t->tid = allocate_tid();
 
+#ifdef USERPROG
+  if (thread_current()->create_process)
+  {
+    t->as_child = (struct child_thread *)malloc(sizeof(struct child_thread));
+    t->as_child->tid = tid;
+    t->as_child->t = t;
+    t->as_child->parent = thread_current();
+    t->as_child->exit_code = 0;
+    sema_init(&t->as_child->wait_sema, 0);
+    list_push_back(&thread_current()->child_list, &t->as_child->elem);
+  }
+#endif
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
   kf->eip = NULL;
@@ -306,6 +319,7 @@ void thread_exit(void)
 
 #ifdef USERPROG
   process_exit();
+  process_die();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -516,6 +530,14 @@ init_thread(struct thread *t, const char *name, int priority)
   t->nice = 0;
   t->recent_cpu = FP_CONVERT(0);
   t->magic = THREAD_MAGIC;
+
+#ifdef USERPROG
+  t->as_child = NULL;
+  t->exit_code = 0;
+  list_init(&t->child_list);
+  t->create_process = false;
+#endif
+
   old_level = intr_disable();
   list_insert_ordered(&all_list, &t->allelem,
                       (list_less_func *)&thread_priority_cmp, NULL);
@@ -717,11 +739,12 @@ void thread_mlfqs_update_priority(struct thread *t)
 int thread_dead(tid_t tid)
 {
   struct list_elem *e;
-  for (e = list_begin (&all_list); e != list_end (&all_list);
-       e = list_next (e))
+  for (e = list_begin(&all_list); e != list_end(&all_list);
+       e = list_next(e))
   {
-    struct thread *t = list_entry (e, struct thread, allelem);
-    if (t->tid == tid) return 0;
+    struct thread *t = list_entry(e, struct thread, allelem);
+    if (t->tid == tid)
+      return 0;
   }
   return 1;
 }
