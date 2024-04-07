@@ -5,6 +5,7 @@
 #include "threads/thread.h"
 #include "userprog/process.h"
 #include "devices/shutdown.h"
+#include "threads/vaddr.h"
 
 static void syscall_handler(struct intr_frame *);
 
@@ -22,6 +23,152 @@ static void sys_read(struct intr_frame *f);
 static void sys_seek(struct intr_frame *f);
 static void sys_tell(struct intr_frame *f);
 
+/* Reads a byte at user virtual address UADDR.
+   UADDR must be below PHYS_BASE.
+   Returns the byte value if successful, -1 if a segfault
+   occurred. */
+static int
+get_user(const uint8_t *uaddr)
+{
+  int result;
+  asm("movl $1f, %0; movzbl %1, %0; 1:"
+      : "=&a"(result) : "m"(*uaddr));
+  return result;
+}
+
+/* Writes BYTE to user address UDST.
+   UDST must be below PHYS_BASE.
+   Returns true if successful, false if a segfault occurred. */
+static bool
+put_user(uint8_t *udst, uint8_t byte)
+{
+  int error_code;
+  asm("movl $1f, %0; movb %b2, %1; 1:"
+      : "=&a"(error_code), "=m"(*udst) : "q"(byte));
+  return error_code != -1;
+}
+
+/* 检查读取size字节是否合法 */
+static void check_read(void *p, size_t size)
+{
+  /*
+    if (size == 0)
+      return;
+
+    if (!is_user_vaddr(p))
+    {
+      thread_current()->exit_code = -1;
+      thread_exit();
+    }
+
+    void *tempp = p;
+    uint32_t page_boundary = (uint32_t)pg_round_down(p);
+    while (p = p + PGSIZE > tempp + size - 1 ? tempp + size - 1 : p + PGSIZE)
+    {
+      if ((uint32_t)pg_round_down(p) <= page_boundary) // 新的一页，检查
+      {
+        page_boundary += PGSIZE;
+        if (!is_user_vaddr(p) || get_user((const uint8_t *)(p)) == -1)
+        {
+          thread_current()->exit_code = -1;
+          thread_exit();
+          NOT_REACHED();
+        }
+      }
+      if (p == tempp + size - 1)
+        break;
+    }
+  */
+  if (!is_user_vaddr(p))
+  {
+    thread_current()->exit_code = -1;
+    thread_exit();
+  }
+  for (size_t i = 0; i < size; i++) // check if every byte is safe to read
+  {
+    if (get_user(p + i) == -1)
+    {
+      thread_current()->exit_code = -1;
+      thread_exit();
+    }
+  }
+}
+
+/* 检查写入size字节是否合法 */
+static void check_write(void *p, size_t size)
+{
+  /*
+    // 检查是否在user space并检查写入是否合法
+    if (!is_user_vaddr(p) || !put_user(p, size))
+    {
+      thread_current()->exit_code = -1;
+      thread_exit();
+    }
+  */
+  if (!is_user_vaddr(p))
+  {
+    thread_current()->exit_code = -1;
+    thread_exit();
+  }
+  for (size_t i = 0; i < size; i++) // check if every byte is safe to write
+  {
+    if (!put_user(p + i, 0))
+    {
+      thread_current()->exit_code = -1;
+      thread_exit();
+    }
+  }
+}
+
+/* 检查读取字符串是否合法 */
+static void check_read_str(char *p)
+{
+  /*
+    // 检查开头在不在user space
+    if (!is_user_vaddr(p))
+    {
+      thread_current()->exit_code = -1;
+      thread_exit();
+      NOT_REACHED();
+    }
+    uint32_t page_boundary = (uint32_t)pg_round_down(p);
+    while (p++)
+    {
+      if ((uint32_t)pg_round_down(p) <= page_boundary) // 新的一页，检查
+      {
+        page_boundary += PGSIZE;
+        if (!is_user_vaddr(p) || get_user((const uint8_t *)(p)) == -1)
+        {
+          thread_current()->exit_code = -1;
+          thread_exit();
+        }
+      }
+      if (*p == '\0')
+        break;
+    }
+  */
+  if (!is_user_vaddr(p))
+  {
+    thread_current()->exit_code = -1;
+    thread_exit();
+  }
+
+  uint8_t *_str = (uint8_t *)p;
+  while (true)
+  {
+    int c = get_user(_str);
+    if (c == -1)
+    {
+      thread_current()->exit_code = -1;
+      thread_exit();
+    }
+    else if (c == '\0') // end of str
+      return;
+    _str++;
+  }
+  NOT_REACHED();
+}
+
 void syscall_init(void)
 {
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
@@ -29,6 +176,7 @@ void syscall_init(void)
 
 static void syscall_handler(struct intr_frame *f)
 {
+  check_read(f->esp, sizeof(int));
   int syscall_type = *(int *)f->esp;
   switch (syscall_type)
   {
@@ -83,14 +231,19 @@ static void sys_halt(struct intr_frame *f UNUSED)
 }
 static void sys_exit(struct intr_frame *f)
 {
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
   int exit_code = *(int *)(f->esp + sizeof(uint32_t));
   thread_current()->exit_code = exit_code;
   thread_exit();
 }
 static void sys_write(struct intr_frame *f)
 {
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
   int fd = *(int *)(f->esp + sizeof(uint32_t));
+  check_read(f->esp + 2 * sizeof(uint32_t), sizeof(int));
   char *buf = *(char **)(f->esp + 2 * sizeof(uint32_t));
+  check_read_str(buf);
+  check_read(f->esp + 3 * sizeof(uint32_t), sizeof(int));
   int size = *(int *)(f->esp + 3 * sizeof(uint32_t));
 
   if (fd == 1)
@@ -101,11 +254,14 @@ static void sys_write(struct intr_frame *f)
 }
 static void sys_exec(struct intr_frame *f)
 {
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
   char *cmd = *(char **)(f->esp + sizeof(uint32_t));
+  check_read_str(cmd);
   f->eax = process_execute(cmd);
 }
 static void sys_wait(struct intr_frame *f)
 {
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
   int pid = *(int *)(f->esp + sizeof(uint32_t));
   f->eax = process_wait(pid);
 }
