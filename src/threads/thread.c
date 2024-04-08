@@ -8,6 +8,7 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
@@ -92,6 +93,10 @@ void thread_init(void)
   lock_init(&tid_lock);
   list_init(&ready_list);
   list_init(&all_list);
+
+#ifdef USERPROG
+  lock_init(&filesys_lock);
+#endif
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
@@ -536,6 +541,9 @@ init_thread(struct thread *t, const char *name, int priority)
   t->exit_code = 0;
   list_init(&t->child_list);
   t->create_process = false;
+  list_init(&t->file_list);
+  t->next_fd = 2;
+  t->running_file = NULL;
 #endif
 
   old_level = intr_disable();

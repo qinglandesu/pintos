@@ -107,7 +107,10 @@ struct thread
    struct child_thread *as_child; /**< 本身作为子进程的记录 */
    struct semaphore execute_sema; /**< semaphore for execute */
    bool start_success;            /**< 子进程是否成功load */
-   bool create_process;         /**< 告诉thread_create是否在创建process */
+   bool create_process;           /**< 告诉thread_create是否在创建process */
+   struct file *running_file;     /**< The executable file loaded by the thread. */
+   struct list file_list;         /**< Files opened by the thread. */
+   int next_fd;                   /**< Next file descriptor.*/
 
 #endif
 
@@ -124,6 +127,15 @@ struct child_thread
    struct semaphore wait_sema; /**< Semaphore to let parent wait on the child. */
    struct list_elem elem;
 };
+
+struct file_
+{
+   int fd;         /**< File descriptor. */
+   struct file *f; /**< Pointer to file. */
+   struct list_elem elem;
+};
+
+struct lock filesys_lock;
 
 /** If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

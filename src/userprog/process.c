@@ -78,7 +78,9 @@ static void start_process(void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  lock_acquire(&filesys_lock);
   success = load(fn, &if_.eip, &if_.esp);
+  lock_release(&filesys_lock);
 
   struct thread *t = thread_current();
   struct thread *parent = t->as_child->parent;
@@ -88,12 +90,19 @@ static void start_process(void *file_name_)
     free(file_name);
     sema_up(&parent->execute_sema);
     thread_current()->exit_code = -1;
+    thread_current()->as_child->t = NULL;
     thread_exit();
   }
   else // success
   {
     parent->start_success = true;
     sema_up(&parent->execute_sema);
+
+    lock_acquire(&filesys_lock);
+    struct file *f = filesys_open(fn);
+    file_deny_write(f); // 正在运行的可执行文件拒绝写入修改
+    lock_release(&filesys_lock);
+    thread_current()->running_file = f;
 
     // get args
     int argc = 0;
@@ -194,6 +203,11 @@ void process_exit(void)
   uint32_t *pd;
 
   printf("%s: exit(%d)\n", cur->name, cur->exit_code);
+
+  lock_acquire(&filesys_lock);
+  file_close(cur->running_file);
+  lock_release(&filesys_lock);
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -569,10 +583,13 @@ void process_die()
   {
     next = list_next(e);
     child = list_entry(e, struct child_thread, elem);
-    // 子进程还活着，要把它的as_child设为NULL，“自力更生”
-    if (child->t != NULL)
+    if (child->t != NULL) // 子进程还活着，要把它的as_child设为NULL，“自力更生”
     {
       child->t->as_child = NULL;
+    }
+    else // 子进程死了但没exit先yield
+    {
+      thread_yield();
     }
     free(child);
     e = next;
@@ -589,4 +606,41 @@ void process_die()
   {
     free(t->as_child);
   }
+
+  // 关闭所有文件
+  struct file_ *f_;
+  int fd;
+  while (!list_empty(&t->file_list))
+  {
+    fd = list_entry(list_front(&t->file_list), struct file_, elem)->fd;
+    f_ = fd_to_file_(fd);
+    if (f_ != NULL)
+    {
+      lock_acquire(&filesys_lock);
+      file_close(f_->f);
+      lock_release(&filesys_lock);
+      list_remove(&f_->elem);
+      free(f_);
+    }
+  }
+}
+
+bool fd_cmp(const struct list_elem *left,
+            const struct list_elem *right, void *aux UNUSED)
+{
+  return list_entry(left, struct file_, elem)->fd <
+         list_entry(right, struct file_, elem)->fd;
+}
+
+struct file_ *fd_to_file_(int fd)
+{
+  struct thread *t_cur = thread_current();
+  struct list_elem *e = list_begin(&t_cur->file_list);
+  for (; e != list_end(&t_cur->file_list); e = list_next(e))
+  {
+    struct file_ *f_ = list_entry(e, struct file_, elem);
+    if (f_->fd == fd)
+      return f_;
+  }
+  return NULL;
 }

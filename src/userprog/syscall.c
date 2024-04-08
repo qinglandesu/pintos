@@ -1,11 +1,15 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
+#include "devices/shutdown.h"
+#include "threads/malloc.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-#include "userprog/process.h"
-#include "devices/shutdown.h"
 #include "threads/vaddr.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
+#include "userprog/process.h"
 
 static void syscall_handler(struct intr_frame *);
 
@@ -246,10 +250,22 @@ static void sys_write(struct intr_frame *f)
   check_read(f->esp + 3 * sizeof(uint32_t), sizeof(int));
   int size = *(int *)(f->esp + 3 * sizeof(uint32_t));
 
-  if (fd == 1)
+  if (fd == 1) // stdout
   {
     putbuf(buf, size);
     f->eax = size;
+  }
+  else
+  {
+    struct file_ *f_ = fd_to_file_(fd);
+    if (f_ != NULL)
+    {
+      lock_acquire(&filesys_lock);
+      f->eax = file_write(f_->f, buf, size);
+      lock_release(&filesys_lock);
+    }
+    else
+      f->eax = -1;
   }
 }
 static void sys_exec(struct intr_frame *f)
@@ -265,11 +281,136 @@ static void sys_wait(struct intr_frame *f)
   int pid = *(int *)(f->esp + sizeof(uint32_t));
   f->eax = process_wait(pid);
 }
-static void sys_create(struct intr_frame *f) {}
-static void sys_remove(struct intr_frame *f) {}
-static void sys_open(struct intr_frame *f) {}
-static void sys_close(struct intr_frame *f) {}
-static void sys_filesize(struct intr_frame *f) {}
-static void sys_read(struct intr_frame *f) {}
-static void sys_seek(struct intr_frame *f) {}
-static void sys_tell(struct intr_frame *f) {}
+static void sys_create(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(char *));
+  char *fname = *(char **)(f->esp + sizeof(uint32_t));
+  check_read_str(fname);
+  check_read(f->esp + 2 * sizeof(uint32_t), sizeof(unsigned));
+  unsigned fsize = *(unsigned *)(f->esp + 2 * sizeof(uint32_t));
+  lock_acquire(&filesys_lock);
+  f->eax = filesys_create(fname, fsize);
+  lock_release(&filesys_lock);
+}
+static void sys_remove(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(char *));
+  char *fname = *(char **)(f->esp + sizeof(uint32_t));
+  check_read_str(fname);
+  lock_acquire(&filesys_lock);
+  f->eax = filesys_remove(fname);
+  lock_release(&filesys_lock);
+}
+static void sys_open(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(char *));
+  char *fname = *(char **)(f->esp + sizeof(uint32_t));
+  check_read_str(fname);
+  lock_acquire(&filesys_lock);
+  struct file *file = filesys_open(fname);
+  lock_release(&filesys_lock);
+
+  if (file != NULL)
+  {
+    struct thread *t = thread_current();
+    struct file_ *f_ = (struct file_ *)malloc(sizeof(struct file_));
+    f_->fd = t->next_fd++;
+    f_->f = file;
+    list_insert_ordered(&t->file_list, &f_->elem, fd_cmp, NULL);
+    f->eax = f_->fd;
+  }
+  else // 打开失败
+    f->eax = -1;
+}
+static void sys_close(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
+  int fd = *(int *)(f->esp + sizeof(uint32_t));
+  struct file_ *f_ = fd_to_file_(fd);
+  if (f_ != NULL)
+  {
+    lock_acquire(&filesys_lock);
+    file_close(f_->f);
+    lock_release(&filesys_lock);
+    list_remove(&f_->elem);
+    free(f_);
+  }
+}
+static void sys_filesize(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
+  int fd = *(int *)(f->esp + sizeof(uint32_t));
+  struct file_ *f_ = fd_to_file_(fd);
+  if (f_ != NULL)
+  {
+    lock_acquire(&filesys_lock);
+    f->eax = file_length(f_->f);
+    lock_release(&filesys_lock);
+  }
+  else
+    f->eax = -1;
+}
+static void sys_read(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
+  int fd = *(int *)(f->esp + sizeof(uint32_t));
+  check_read(f->esp + 2 * sizeof(uint32_t), sizeof(char *));
+  char *buf = *(char **)(f->esp + 2 * sizeof(uint32_t));
+  check_read(f->esp + 3 * sizeof(uint32_t), sizeof(int));
+  unsigned size = *(int *)(f->esp + 3 * sizeof(uint32_t));
+  if (size == 0)
+    f->eax = 0;
+  else
+  {
+    check_write(buf, size);
+    if (fd == 0) // stdin
+    {
+      for (size_t i = 0; i < size; i++)
+      {
+        *buf = (char)input_getc();
+        buf++;
+      }
+      f->eax = size;
+    }
+    else
+    {
+      struct file_ *f_ = fd_to_file_(fd);
+      if (f_ != NULL)
+      {
+        lock_acquire(&filesys_lock);
+        f->eax = file_read(f_->f, buf, size);
+        lock_release(&filesys_lock);
+      }
+      else
+        f->eax = -1;
+    }
+  }
+}
+static void sys_seek(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
+  int fd = *(int *)(f->esp + sizeof(uint32_t));
+  check_read(f->esp + 2 * sizeof(uint32_t), sizeof(unsigned));
+  unsigned off = *(int *)(f->esp + 2 * sizeof(uint32_t));
+  struct file_ *f_ = fd_to_file_(fd);
+  if (f_ != NULL)
+  {
+    lock_acquire(&filesys_lock);
+    file_seek(f_->f, off);
+    lock_release(&filesys_lock);
+  }
+}
+static void sys_tell(struct intr_frame *f)
+{
+  check_read(f->esp + sizeof(uint32_t), sizeof(int));
+  int fd = *(int *)(f->esp + sizeof(uint32_t));
+  struct file_ *f_ = fd_to_file_(fd);
+  if (f_ != NULL)
+  {
+    lock_acquire(&filesys_lock);
+    f->eax = file_tell(f_->f);
+    lock_release(&filesys_lock);
+  }
+  else
+    f->eax = -1;
+}
