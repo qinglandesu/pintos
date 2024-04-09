@@ -108,7 +108,7 @@ struct thread
    struct semaphore execute_sema; /**< semaphore for execute */
    bool start_success;            /**< 子进程是否成功load */
    bool create_process;           /**< 告诉thread_create是否在创建process */
-   struct file *running_file;     /**< The executable file loaded by the thread. */
+   struct file *running_file;     /**< The running executable file. */
    struct list file_list;         /**< Files opened by the thread. */
    int next_fd;                   /**< Next file descriptor.*/
 
@@ -118,23 +118,25 @@ struct thread
    unsigned magic; /**< Detects stack overflow. */
 };
 
+/* 记录父子进程相关信息 */
 struct child_thread
 {
    tid_t tid;                  /**< Child's tid. */
    struct thread *t;           /**< Pointer to child. NULL when dead*/
    struct thread *parent;      /**< Thread's parent. */
    int exit_code;              /**< Child's exit code. */
-   struct semaphore wait_sema; /**< Semaphore to let parent wait on the child. */
+   struct semaphore wait_sema; /**< Semaphore for parent waiting the child. */
    struct list_elem elem;
 };
 
+/* 记录文件信息 */
 struct file_
 {
    int fd;         /**< File descriptor. */
    struct file *f; /**< Pointer to file. */
    struct list_elem elem;
 };
-
+/* 保护file_的锁 */
 struct lock filesys_lock;
 
 /** If false (default), use round-robin scheduler.

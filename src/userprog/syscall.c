@@ -55,34 +55,6 @@ put_user(uint8_t *udst, uint8_t byte)
 /* 检查读取size字节是否合法 */
 static void check_read(void *p, size_t size)
 {
-  /*
-    if (size == 0)
-      return;
-
-    if (!is_user_vaddr(p))
-    {
-      thread_current()->exit_code = -1;
-      thread_exit();
-    }
-
-    void *tempp = p;
-    uint32_t page_boundary = (uint32_t)pg_round_down(p);
-    while (p = p + PGSIZE > tempp + size - 1 ? tempp + size - 1 : p + PGSIZE)
-    {
-      if ((uint32_t)pg_round_down(p) <= page_boundary) // 新的一页，检查
-      {
-        page_boundary += PGSIZE;
-        if (!is_user_vaddr(p) || get_user((const uint8_t *)(p)) == -1)
-        {
-          thread_current()->exit_code = -1;
-          thread_exit();
-          NOT_REACHED();
-        }
-      }
-      if (p == tempp + size - 1)
-        break;
-    }
-  */
   if (!is_user_vaddr(p))
   {
     thread_current()->exit_code = -1;
@@ -101,14 +73,6 @@ static void check_read(void *p, size_t size)
 /* 检查写入size字节是否合法 */
 static void check_write(void *p, size_t size)
 {
-  /*
-    // 检查是否在user space并检查写入是否合法
-    if (!is_user_vaddr(p) || !put_user(p, size))
-    {
-      thread_current()->exit_code = -1;
-      thread_exit();
-    }
-  */
   if (!is_user_vaddr(p))
   {
     thread_current()->exit_code = -1;
@@ -127,30 +91,6 @@ static void check_write(void *p, size_t size)
 /* 检查读取字符串是否合法 */
 static void check_read_str(char *p)
 {
-  /*
-    // 检查开头在不在user space
-    if (!is_user_vaddr(p))
-    {
-      thread_current()->exit_code = -1;
-      thread_exit();
-      NOT_REACHED();
-    }
-    uint32_t page_boundary = (uint32_t)pg_round_down(p);
-    while (p++)
-    {
-      if ((uint32_t)pg_round_down(p) <= page_boundary) // 新的一页，检查
-      {
-        page_boundary += PGSIZE;
-        if (!is_user_vaddr(p) || get_user((const uint8_t *)(p)) == -1)
-        {
-          thread_current()->exit_code = -1;
-          thread_exit();
-        }
-      }
-      if (*p == '\0')
-        break;
-    }
-  */
   if (!is_user_vaddr(p))
   {
     thread_current()->exit_code = -1;
