@@ -216,6 +216,14 @@ tid_t thread_create(const char *name, int priority,
   }
 #endif
 
+#ifdef VM
+  if (thread_current()->create_process)
+  {
+    t->spt = (struct hash *)malloc(sizeof(struct hash));
+    hash_init(t->spt, spte_hash_func, spte_less_func, NULL);
+  }
+#endif
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
   kf->eip = NULL;
@@ -544,6 +552,10 @@ init_thread(struct thread *t, const char *name, int priority)
   list_init(&t->file_list);
   t->next_fd = 2;
   t->running_file = NULL;
+#endif
+
+#ifdef VM
+  t->spt = NULL;
 #endif
 
   old_level = intr_disable();

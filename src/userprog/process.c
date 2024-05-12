@@ -18,6 +18,7 @@
 #include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load(const char *cmdline, void (**eip)(void), void **esp);
@@ -505,14 +506,14 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
     /* Get a page of memory. */
-    uint8_t *kpage = palloc_get_page(PAL_USER);
+    uint8_t *kpage = get_frame(PAL_USER);
     if (kpage == NULL)
       return false;
 
     /* Load this page. */
     if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
     {
-      palloc_free_page(kpage);
+      free_frame(kpage);
       return false;
     }
     memset(kpage + page_read_bytes, 0, page_zero_bytes);
@@ -520,7 +521,7 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     /* Add the page to the process's address space. */
     if (!install_page(upage, kpage, writable))
     {
-      palloc_free_page(kpage);
+      free_frame(kpage);
       return false;
     }
 
@@ -540,14 +541,14 @@ setup_stack(void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+  kpage = get_frame(PAL_USER | PAL_ZERO);
   if (kpage != NULL)
   {
     success = install_page(((uint8_t *)PHYS_BASE) - PGSIZE, kpage, true);
     if (success)
       *esp = PHYS_BASE;
     else
-      palloc_free_page(kpage);
+      free_frame(kpage);
   }
   return success;
 }
@@ -568,8 +569,12 @@ install_page(void *upage, void *kpage, bool writable)
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
-  return (pagedir_get_page(t->pagedir, upage) == NULL &&
-          pagedir_set_page(t->pagedir, upage, kpage, writable));
+  bool suc = (pagedir_get_page(t->pagedir, upage) == NULL &&
+              pagedir_set_page(t->pagedir, upage, kpage, writable));
+#ifdef VM
+  suc = suc && spt_set_page(t, upage);
+#endif
+  return suc;
 }
 
 void process_die()
@@ -623,6 +628,10 @@ void process_die()
       free(f_);
     }
   }
+#ifdef VM
+  hash_destroy(t->spt, spte_destroy_func);
+  free(t->spt);
+#endif
 }
 
 bool fd_cmp(const struct list_elem *left,

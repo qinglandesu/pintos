@@ -4,8 +4,10 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <hash.h>
 #include "fixed_point.h"
 #include "threads/synch.h"
+#include "vm/page.h"
 
 /** States in a thread's life cycle. */
 enum thread_status
@@ -19,7 +21,7 @@ enum thread_status
 /** Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
-#define TID_ERROR ((tid_t)-1) /**< Error value for tid_t. */
+#define TID_ERROR ((tid_t) - 1) /**< Error value for tid_t. */
 
 /** Thread priorities. */
 #define PRI_MIN 0      /**< Lowest priority. */
@@ -114,6 +116,10 @@ struct thread
 
 #endif
 
+#ifdef VM
+   struct hash *spt; /**< supplemental_page_table */
+#endif
+
    /* Owned by thread.c. */
    unsigned magic; /**< Detects stack overflow. */
 };
@@ -181,7 +187,7 @@ void thread_mlfqs_update_per_second(void);
 void thread_mlfqs_update_4ticks(void);
 void thread_mlfqs_update_priority(struct thread *t);
 bool thread_priority_cmp(const struct list_elem *e1,
-                         const struct list_elem *e2, void *aux);
+                         const struct list_elem *e2, void *aux UNUSED);
 
 int thread_dead(tid_t tid);
 

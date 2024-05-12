@@ -119,7 +119,9 @@ void sema_up(struct semaphore *sema)
   sema->value++;
 
   intr_set_level(old_level);
-  if (!intr_context() && old_level == INTR_ON)
+  if (intr_context())
+    intr_yield_on_return();
+  else if (old_level == INTR_ON)
     thread_yield();
 }
 
@@ -206,7 +208,7 @@ void lock_acquire(struct lock *lock)
   {
     t->waiting = lock;
     l = lock;
-    while (l && t->priority > l->priority)
+    while (l && t->priority > l->priority && l->holder != NULL)
     {
       l->priority = t->priority;
       l->holder->priority = t->priority >
