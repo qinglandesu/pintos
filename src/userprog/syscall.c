@@ -121,6 +121,9 @@ void syscall_init(void)
 static void syscall_handler(struct intr_frame *f)
 {
   check_read(f->esp, sizeof(int));
+#ifdef VM
+  thread_current()->esp = f->esp;
+#endif
   int syscall_type = *(int *)f->esp;
   switch (syscall_type)
   {

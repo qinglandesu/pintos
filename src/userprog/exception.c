@@ -149,27 +149,68 @@ page_fault(struct intr_frame *f)
    write = (f->error_code & PF_W) != 0;
    user = (f->error_code & PF_U) != 0;
 
+#ifdef VM
+   struct thread *t = thread_current();
+   void *esp = user ? f->esp : t->esp;
+   // 判断是否向read-only page写入
+   if (not_present)
+   {
+      // 先activate一下试试
+      if (spt_lookup(t, pg_round_down(fault_addr)))
+      {
+         if (activate_page(t, pg_round_down(fault_addr)))
+            return;
+      }
+      // 如果是栈上而且栈没有超过限制，需要grow
+      if (fault_addr < PHYS_BASE &&
+          (uint8_t *)fault_addr >= (uint8_t *)PHYS_BASE - STACK_LIMIT &&
+          (uint8_t *)fault_addr > (uint8_t *)esp - 1024)
+      {
+         spt_add_page(t, pg_round_down(fault_addr), DEMAND_ZERO);
+         activate_page(t, pg_round_down(fault_addr));
+         return;
+      }
+      else
+      {
+         // printf("not on stack\n");
+      }
+   }
+   // 如果是向只读页面写入或者访问了不存在的地址，和以前一样
    if (!user) // 非user，syscall非法访存导致
    {
       f->eip = (void (*)(void))f->eax;
       f->eax = -1;
       return;
    }
+   else
+   {
+      printf("Page fault at %p: %s error %s page in %s context.\n",
+             fault_addr,
+             not_present ? "not present" : "rights violation",
+             write ? "writing" : "reading",
+             user ? "user" : "kernel");
+      kill(f);
+   }
 
-#ifdef VM
-   struct thread *t = thread_current();
-   // 尝试activate
-   if (activate_page(t, (void *)pg_round_down(fault_addr)))
+#else
+   if (!user) // 非user，syscall非法访存导致
+   {
+      f->eip = (void (*)(void))f->eax;
+      f->eax = -1;
       return;
-#endif
-
-   /* To implement virtual memory, delete the rest of the function
+   }
+   else
+   {
+      /* To implement virtual memory, delete the rest of the function
       body, and replace it with code that brings in the page to
       which fault_addr refers. */
-   printf("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-   kill(f);
+      printf("Page fault at %p: %s error %s page in %s context.\n",
+             fault_addr,
+             not_present ? "not present" : "rights violation",
+             write ? "writing" : "reading",
+             user ? "user" : "kernel");
+      kill(f);
+   }
+
+#endif
 }

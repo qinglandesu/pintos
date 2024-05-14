@@ -79,9 +79,7 @@ static void start_process(void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  lock_acquire(&filesys_lock);
   success = load(fn, &if_.eip, &if_.esp);
-  lock_release(&filesys_lock);
 
   struct thread *t = thread_current();
   struct thread *parent = t->as_child->parent;
@@ -331,7 +329,9 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
   process_activate();
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
   file = filesys_open(file_name);
+  lock_release(&filesys_lock);
   if (file == NULL)
   {
     printf("load: %s: open failed\n", file_name);
@@ -339,6 +339,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
   }
 
   /* Read and verify executable header. */
+  lock_acquire(&filesys_lock);
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
       memcmp(ehdr.e_ident, "\177ELF\1\1\1", 7) ||
       ehdr.e_type != 2 ||
@@ -350,6 +351,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
     printf("load: %s: error loading executable\n", file_name);
     goto done;
   }
+  lock_release(&filesys_lock);
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
@@ -359,10 +361,17 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
 
     if (file_ofs < 0 || file_ofs > file_length(file))
       goto done;
+    lock_acquire(&filesys_lock);
     file_seek(file, file_ofs);
+    lock_release(&filesys_lock);
 
+    lock_acquire(&filesys_lock);
     if (file_read(file, &phdr, sizeof phdr) != sizeof phdr)
+    {
+      lock_release(&filesys_lock);
       goto done;
+    }
+    lock_release(&filesys_lock);
     file_ofs += sizeof phdr;
     switch (phdr.p_type)
     {
@@ -421,7 +430,9 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
 
 done:
   /* We arrive here whether the load is successful or not. */
+  lock_acquire(&filesys_lock);
   file_close(file);
+  lock_release(&filesys_lock);
   return success;
 }
 
@@ -439,8 +450,13 @@ validate_segment(const struct Elf32_Phdr *phdr, struct file *file)
     return false;
 
   /* p_offset must point within FILE. */
+  lock_acquire(&filesys_lock);
   if (phdr->p_offset > (Elf32_Off)file_length(file))
+  {
+    lock_release(&filesys_lock);
     return false;
+  }
+  lock_release(&filesys_lock);
 
   /* p_memsz must be at least as big as p_filesz. */
   if (phdr->p_memsz < phdr->p_filesz)
@@ -496,7 +512,9 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
   ASSERT(pg_ofs(upage) == 0);
   ASSERT(ofs % PGSIZE == 0);
 
+  lock_acquire(&filesys_lock);
   file_seek(file, ofs);
+  lock_release(&filesys_lock);
   while (read_bytes > 0 || zero_bytes > 0)
   {
     /* Calculate how to fill this page.
@@ -505,23 +523,40 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
+#ifdef VM
+    lock_acquire(&frame_lock);
+#endif
     /* Get a page of memory. */
-    uint8_t *kpage = get_frame(PAL_USER);
+    uint8_t *kpage = get_frame(PAL_USER, upage);
     if (kpage == NULL)
-      return false;
-
-    /* Load this page. */
-    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
     {
-      free_frame(kpage);
+#ifdef VM
+      lock_release(&frame_lock);
+#endif
       return false;
     }
+
+    /* Load this page. */
+    lock_acquire(&filesys_lock);
+    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
+    {
+      lock_release(&filesys_lock);
+      free_frame(kpage);
+#ifdef VM
+      lock_release(&frame_lock);
+#endif
+      return false;
+    }
+    lock_release(&filesys_lock);
     memset(kpage + page_read_bytes, 0, page_zero_bytes);
 
     /* Add the page to the process's address space. */
     if (!install_page(upage, kpage, writable))
     {
       free_frame(kpage);
+#ifdef VM
+      lock_release(&frame_lock);
+#endif
       return false;
     }
 
@@ -529,6 +564,9 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     read_bytes -= page_read_bytes;
     zero_bytes -= page_zero_bytes;
     upage += PGSIZE;
+#ifdef VM
+    lock_release(&frame_lock);
+#endif
   }
   return true;
 }
@@ -541,15 +579,24 @@ setup_stack(void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = get_frame(PAL_USER | PAL_ZERO);
+#ifdef VM
+  lock_acquire(&frame_lock);
+#endif
+  kpage = get_frame(PAL_USER | PAL_ZERO, ((uint8_t *)PHYS_BASE) - PGSIZE);
   if (kpage != NULL)
   {
     success = install_page(((uint8_t *)PHYS_BASE) - PGSIZE, kpage, true);
     if (success)
+    {
       *esp = PHYS_BASE;
+    }
     else
       free_frame(kpage);
   }
+#ifdef VM
+  lock_release(&frame_lock);
+#endif
+
   return success;
 }
 
@@ -561,7 +608,7 @@ setup_stack(void **esp)
    KPAGE should probably be a page obtained from the user pool
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
-   if memory allocation fails. */
+   if memory allocation fails.*/
 static bool
 install_page(void *upage, void *kpage, bool writable)
 {
@@ -572,7 +619,7 @@ install_page(void *upage, void *kpage, bool writable)
   bool suc = (pagedir_get_page(t->pagedir, upage) == NULL &&
               pagedir_set_page(t->pagedir, upage, kpage, writable));
 #ifdef VM
-  suc = suc && spt_set_page(t, upage);
+  suc = suc && spt_add_page(t, upage, IN_USE); // 向spt插入条目
 #endif
   return suc;
 }

@@ -556,6 +556,7 @@ init_thread(struct thread *t, const char *name, int priority)
 
 #ifdef VM
   t->spt = NULL;
+  t->esp = NULL;
 #endif
 
   old_level = intr_disable();

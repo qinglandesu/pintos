@@ -113,11 +113,11 @@ struct thread
    struct file *running_file;     /**< The running executable file. */
    struct list file_list;         /**< Files opened by the thread. */
    int next_fd;                   /**< Next file descriptor.*/
-
 #endif
 
 #ifdef VM
    struct hash *spt; /**< supplemental_page_table */
+   uint8_t *esp;     /**< stack pointer */
 #endif
 
    /* Owned by thread.c. */
