@@ -219,7 +219,6 @@ tid_t thread_create(const char *name, int priority,
 #ifdef VM
   if (thread_current()->create_process)
   {
-    t->user_process = true;
     t->spt = (struct hash *)malloc(sizeof(struct hash));
     hash_init(t->spt, spte_hash_func, spte_less_func, NULL);
   }
@@ -332,8 +331,8 @@ void thread_exit(void)
   ASSERT(!intr_context());
 
 #ifdef VM
-  // process_exit会palloc_free_page，因此要先从fht里删除对应frame，再palloc_free_page
   lock_acquire(&frame_lock);
+  munmap_on_exit();
   free_frame_on_exit();
   lock_release(&frame_lock);
 #endif
@@ -565,8 +564,8 @@ init_thread(struct thread *t, const char *name, int priority)
 #ifdef VM
   t->spt = NULL;
   t->esp = NULL;
-  t->user_process = false;
   t->VM_executable = NULL;
+  list_init(&t->mmap_list);
 #endif
 
   old_level = intr_disable();
@@ -778,4 +777,24 @@ int thread_dead(tid_t tid)
       return 0;
   }
   return 1;
+}
+
+bool fd_cmp(const struct list_elem *left,
+            const struct list_elem *right, void *aux UNUSED)
+{
+  return list_entry(left, struct file_, elem)->fd <
+         list_entry(right, struct file_, elem)->fd;
+}
+
+struct file_ *fd_to_file_(int fd)
+{
+  struct thread *t_cur = thread_current();
+  struct list_elem *e = list_begin(&t_cur->file_list);
+  for (; e != list_end(&t_cur->file_list); e = list_next(e))
+  {
+    struct file_ *f_ = list_entry(e, struct file_, elem);
+    if (f_->fd == fd)
+      return f_;
+  }
+  return NULL;
 }

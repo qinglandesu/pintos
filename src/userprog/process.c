@@ -601,9 +601,6 @@ setup_stack(void **esp)
     if (success)
     {
       *esp = PHYS_BASE;
-#ifdef VM
-      frame_unpin(kpage);
-#endif
     }
     else
       free_frame(kpage);
@@ -700,24 +697,4 @@ void process_die()
   lock_release(&frame_lock);
   free(t->spt);
 #endif
-}
-
-bool fd_cmp(const struct list_elem *left,
-            const struct list_elem *right, void *aux UNUSED)
-{
-  return list_entry(left, struct file_, elem)->fd <
-         list_entry(right, struct file_, elem)->fd;
-}
-
-struct file_ *fd_to_file_(int fd)
-{
-  struct thread *t_cur = thread_current();
-  struct list_elem *e = list_begin(&t_cur->file_list);
-  for (; e != list_end(&t_cur->file_list); e = list_next(e))
-  {
-    struct file_ *f_ = list_entry(e, struct file_, elem);
-    if (f_->fd == fd)
-      return f_;
-  }
-  return NULL;
 }

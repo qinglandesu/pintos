@@ -158,8 +158,13 @@ page_fault(struct intr_frame *f)
       // 先activate一下试试
       if (spt_lookup(t, pg_round_down(fault_addr)))
       {
+         lock_acquire(&frame_lock);
          if (activate_page(t, pg_round_down(fault_addr)))
+         {
+            lock_release(&frame_lock);
             return;
+         }
+         lock_release(&frame_lock);
       }
       // 如果是栈上而且栈没有超过限制，需要grow
       if (fault_addr < PHYS_BASE &&
@@ -167,7 +172,9 @@ page_fault(struct intr_frame *f)
           (uint8_t *)fault_addr > (uint8_t *)esp - 1024)
       {
          spt_add_page(t, pg_round_down(fault_addr), DEMAND_ZERO, NULL);
+         lock_acquire(&frame_lock);
          activate_page(t, pg_round_down(fault_addr));
+         lock_release(&frame_lock);
          return;
       }
    }

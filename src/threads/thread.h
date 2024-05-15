@@ -116,10 +116,10 @@ struct thread
 #endif
 
 #ifdef VM
-   struct hash *spt; /**< supplemental_page_table */
-   uint8_t *esp;     /**< stack pointer */
-   bool user_process;
-   struct file *VM_executable; /**< 自己的executable file，用于demand paging */
+   struct hash *spt;           /**< supplemental_page_table */
+   uint8_t *esp;               /**< stack pointer */
+   struct file *VM_executable; /**< lazy load的executable file */
+   struct list mmap_list;      /**< mmap文件的list */
 #endif
 
    /* Owned by thread.c. */
@@ -146,6 +146,9 @@ struct file_
 };
 /* 保护file_的锁 */
 struct lock filesys_lock;
+bool fd_cmp(const struct list_elem *left,
+            const struct list_elem *right, void *);
+struct file_ *fd_to_file_(int fd);
 
 /** If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
