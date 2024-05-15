@@ -118,6 +118,8 @@ struct thread
 #ifdef VM
    struct hash *spt; /**< supplemental_page_table */
    uint8_t *esp;     /**< stack pointer */
+   bool user_process;
+   struct file *VM_executable; /**< 自己的executable file，用于demand paging */
 #endif
 
    /* Owned by thread.c. */

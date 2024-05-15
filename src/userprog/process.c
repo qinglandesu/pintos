@@ -429,10 +429,15 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
   success = true;
 
 done:
-  /* We arrive here whether the load is successful or not. */
+/* We arrive here whether the load is successful or not. */
+#ifdef VM
+  // lazy load 还要用到file先不close,在进程退出时关闭
+  thread_current()->VM_executable = file;
+#else
   lock_acquire(&filesys_lock);
   file_close(file);
   lock_release(&filesys_lock);
+#endif
   return success;
 }
 
@@ -524,15 +529,30 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 #ifdef VM
+    // lazy load
+    struct spt_entry *spte;
+    spte = (struct spt_entry *)malloc(sizeof(struct spt_entry));
+    spte->upage = upage;
+    spte->kpage = NULL;
+    spte->status = LAZY_LOAD;
+    spte->file = file;
+    spte->offset = ofs;
+    spte->read_bytes = page_read_bytes;
+    spte->zero_bytes = page_zero_bytes;
+    spte->writable = writable;
     lock_acquire(&frame_lock);
-#endif
+    if (hash_insert(thread_current()->spt, &spte->elem))
+    {
+      PANIC("spt already has entry in load_segment");
+    }
+    lock_release(&frame_lock);
+
+    ofs += PGSIZE;
+#else
     /* Get a page of memory. */
     uint8_t *kpage = get_frame(PAL_USER, upage);
     if (kpage == NULL)
     {
-#ifdef VM
-      lock_release(&frame_lock);
-#endif
       return false;
     }
 
@@ -542,9 +562,6 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     {
       lock_release(&filesys_lock);
       free_frame(kpage);
-#ifdef VM
-      lock_release(&frame_lock);
-#endif
       return false;
     }
     lock_release(&filesys_lock);
@@ -554,19 +571,14 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     if (!install_page(upage, kpage, writable))
     {
       free_frame(kpage);
-#ifdef VM
-      lock_release(&frame_lock);
-#endif
       return false;
     }
+#endif
 
     /* Advance. */
     read_bytes -= page_read_bytes;
     zero_bytes -= page_zero_bytes;
     upage += PGSIZE;
-#ifdef VM
-    lock_release(&frame_lock);
-#endif
   }
   return true;
 }
@@ -589,12 +601,16 @@ setup_stack(void **esp)
     if (success)
     {
       *esp = PHYS_BASE;
+#ifdef VM
+      frame_unpin(kpage);
+#endif
     }
     else
       free_frame(kpage);
   }
 #ifdef VM
   lock_release(&frame_lock);
+  pagedir_set_dirty(thread_current()->pagedir, kpage, true);
 #endif
 
   return success;
@@ -619,7 +635,7 @@ install_page(void *upage, void *kpage, bool writable)
   bool suc = (pagedir_get_page(t->pagedir, upage) == NULL &&
               pagedir_set_page(t->pagedir, upage, kpage, writable));
 #ifdef VM
-  suc = suc && spt_add_page(t, upage, IN_USE); // 向spt插入条目
+  suc = suc && spt_add_page(t, upage, IN_USE, kpage); // 向spt插入条目
 #endif
   return suc;
 }
@@ -676,7 +692,12 @@ void process_die()
     }
   }
 #ifdef VM
+  lock_acquire(&filesys_lock);
+  file_close(t->VM_executable);
+  lock_release(&filesys_lock);
+  lock_acquire(&frame_lock);
   hash_destroy(t->spt, spte_destroy_func);
+  lock_release(&frame_lock);
   free(t->spt);
 #endif
 }

@@ -166,6 +166,12 @@ static void syscall_handler(struct intr_frame *f)
   case SYS_TELL:
     sys_tell(f);
     break;
+  case SYS_MMAP:
+    PANIC("mmap not inplemented");
+    break;
+  case SYS_MUNMAP:
+    PANIC("munmap not inplemented");
+    break;
   default:
     PANIC("invalid syscall");
     break;

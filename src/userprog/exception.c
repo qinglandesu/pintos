@@ -152,7 +152,7 @@ page_fault(struct intr_frame *f)
 #ifdef VM
    struct thread *t = thread_current();
    void *esp = user ? f->esp : t->esp;
-   // 判断是否向read-only page写入
+   // 不是向read-only page写入
    if (not_present)
    {
       // 先activate一下试试
@@ -166,33 +166,14 @@ page_fault(struct intr_frame *f)
           (uint8_t *)fault_addr >= (uint8_t *)PHYS_BASE - STACK_LIMIT &&
           (uint8_t *)fault_addr > (uint8_t *)esp - 1024)
       {
-         spt_add_page(t, pg_round_down(fault_addr), DEMAND_ZERO);
+         spt_add_page(t, pg_round_down(fault_addr), DEMAND_ZERO, NULL);
          activate_page(t, pg_round_down(fault_addr));
          return;
       }
-      else
-      {
-         // printf("not on stack\n");
-      }
    }
    // 如果是向只读页面写入或者访问了不存在的地址，和以前一样
-   if (!user) // 非user，syscall非法访存导致
-   {
-      f->eip = (void (*)(void))f->eax;
-      f->eax = -1;
-      return;
-   }
-   else
-   {
-      printf("Page fault at %p: %s error %s page in %s context.\n",
-             fault_addr,
-             not_present ? "not present" : "rights violation",
-             write ? "writing" : "reading",
-             user ? "user" : "kernel");
-      kill(f);
-   }
+#endif
 
-#else
    if (!user) // 非user，syscall非法访存导致
    {
       f->eip = (void (*)(void))f->eax;
@@ -202,8 +183,8 @@ page_fault(struct intr_frame *f)
    else
    {
       /* To implement virtual memory, delete the rest of the function
-      body, and replace it with code that brings in the page to
-      which fault_addr refers. */
+         body, and replace it with code that brings in the page to
+         which fault_addr refers. */
       printf("Page fault at %p: %s error %s page in %s context.\n",
              fault_addr,
              not_present ? "not present" : "rights violation",
@@ -211,6 +192,4 @@ page_fault(struct intr_frame *f)
              user ? "user" : "kernel");
       kill(f);
    }
-
-#endif
 }

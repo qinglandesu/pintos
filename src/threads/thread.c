@@ -219,6 +219,7 @@ tid_t thread_create(const char *name, int priority,
 #ifdef VM
   if (thread_current()->create_process)
   {
+    t->user_process = true;
     t->spt = (struct hash *)malloc(sizeof(struct hash));
     hash_init(t->spt, spte_hash_func, spte_less_func, NULL);
   }
@@ -329,6 +330,13 @@ tid_t thread_tid(void)
 void thread_exit(void)
 {
   ASSERT(!intr_context());
+
+#ifdef VM
+  // process_exit会palloc_free_page，因此要先从fht里删除对应frame，再palloc_free_page
+  lock_acquire(&frame_lock);
+  free_frame_on_exit();
+  lock_release(&frame_lock);
+#endif
 
 #ifdef USERPROG
   process_exit();
@@ -557,6 +565,8 @@ init_thread(struct thread *t, const char *name, int priority)
 #ifdef VM
   t->spt = NULL;
   t->esp = NULL;
+  t->user_process = false;
+  t->VM_executable = NULL;
 #endif
 
   old_level = intr_disable();
