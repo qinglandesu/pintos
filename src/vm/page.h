@@ -3,7 +3,6 @@
 #include <hash.h>
 #include "threads/palloc.h"
 #include "threads/thread.h"
-//#define VM
 #ifdef VM
 
 #define STACK_LIMIT 0x800000
@@ -21,12 +20,13 @@ enum page_status
 struct frame_entry
 {
     struct thread *t;
-    void *kpage;
-    void *upage;
-    struct hash_elem elem;
+    void *kpage;            /**< kernel address */
+    void *upage;            /**< user address */
+    struct hash_elem elem;  /**< 用于插入frame_hash_table */
+    struct list_elem cl_elem; /* 用于插入clock_list */
 };
 /* 保护frame的锁 */
-struct lock frame_lock; 
+struct lock frame_lock;
 
 /* supplemental page table entry */
 struct spt_entry
@@ -35,12 +35,12 @@ struct spt_entry
     void *kpage;
     bool writable;
     enum page_status status;
-    struct file *file;
+    struct file *file; /**< lazy load的文件及相关数据 */
     uint32_t offset;
     uint32_t read_bytes;
     uint32_t zero_bytes;
-    uint32_t swap_index;
-    struct hash_elem elem;
+    uint32_t swap_index;   /**< 非swap out时是INT32_MAX */
+    struct hash_elem elem; /**< 插入supplemental page table */
 };
 
 /* mmap list entry */
@@ -81,7 +81,6 @@ unsigned spte_hash_func(const struct hash_elem *, void *);
 bool spte_less_func(const struct hash_elem *,
                     const struct hash_elem *, void *);
 void spte_destroy_func(struct hash_elem *, void *);
-
 
 #else
 #define get_frame(X, Y) palloc_get_page(X)

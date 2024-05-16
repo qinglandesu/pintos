@@ -1,6 +1,7 @@
 #include "vm/page.h"
 #include <stdio.h>
 #include <string.h>
+#include <list.h>
 #include <hash.h>
 #include <bitmap.h>
 #include "devices/block.h"
@@ -13,17 +14,22 @@
 
 #define BLOCK_PER_PAGE (PGSIZE / BLOCK_SECTOR_SIZE)
 
-static struct hash frame_hash_table;
+static struct hash frame_hash_table; /* frame_hash_table */
 
-static struct lock swap_lock;      /*保护swap_block的锁 */
-static struct block *swap_block;   /* swap的block*/
-static struct bitmap *swap_bitmap; /* swap slot占用状态的bitmap*/
+static struct lock swap_lock;      /* 保护swap_block的锁 */
+static struct block *swap_block;   /* swap的block */
+static struct bitmap *swap_bitmap; /* swap slot占用状态的bitmap */
 static size_t swap_maxnum;         /* swap的最大页数量 */
+
+static struct list clock_list; /* 用于clock algorithm */
+static struct list_elem *clock_ptr;
 
 void frame_init()
 {
     lock_init(&frame_lock);
     hash_init(&frame_hash_table, frame_hash_func, frame_less_func, NULL);
+    list_init(&clock_list);
+    clock_ptr = NULL;
 }
 
 /* 分配一个物理帧kpage并将其关联到一个frame table(必须持有frame_lock) */
@@ -47,6 +53,7 @@ void *get_frame(enum palloc_flags flag, void *upage)
     fe->kpage = kpage;
     fe->upage = upage;
     hash_insert(&frame_hash_table, &fe->elem);
+    list_push_back(&clock_list, &fe->cl_elem);
 
     return kpage;
 }
@@ -71,6 +78,11 @@ void frame_table_remove(void *kpage)
     struct hash_elem *h = hash_find(&frame_hash_table, &temp.elem);
     struct frame_entry *fe = hash_entry(h, struct frame_entry, elem);
     hash_delete(&frame_hash_table, &fe->elem);
+
+    if (clock_ptr == &fe->cl_elem)
+        clock_ptr = list_next(&fe->cl_elem);
+    list_remove(&fe->cl_elem);
+
     free(fe);
 }
 
@@ -282,21 +294,32 @@ void swap_free(uint32_t index)
 void page_evict()
 {
     ASSERT(lock_held_by_current_thread(&frame_lock));
+    ASSERT(!list_empty(&clock_list))
     size_t n = hash_size(&frame_hash_table);
-    static unsigned prng = 1;
     struct frame_entry *fe;
 
-    /*选择一个随机的frame*/
-    prng = prng * 1664525u + 1013904223u;
-    size_t pointer = prng % n;
-    struct hash_iterator it;
-    hash_first(&it, &frame_hash_table);
-    for (size_t i = 0; i <= pointer; ++i)
-        hash_next(&it);
-    fe = hash_entry(hash_cur(&it), struct frame_entry, elem);
+    for (uint32_t i = 0; i < 2 * n; i++)
+    {
+        if (clock_ptr == NULL || clock_ptr == list_end(&clock_list))
+            clock_ptr = list_begin(&clock_list);
+        else
+            clock_ptr = list_next(clock_ptr);
 
-    /*先处理pagedir，这样将要被evict的页所属的线程再访问这个页的时候会fault，
-    之后进入activate_page等待frame_lock，实现了只要一个页被选中要驱逐，对其的访问都会被阻塞*/
+        if (clock_ptr == list_end(&clock_list))
+            clock_ptr = list_begin(&clock_list);
+
+        fe = list_entry(clock_ptr, struct frame_entry, cl_elem);
+        // if referenced, give a second chance.
+        if (pagedir_is_accessed(fe->t->pagedir, fe->upage))
+        {
+            pagedir_set_accessed(fe->t->pagedir, fe->upage, false);
+            continue;
+        }
+        break;
+    }
+
+    /*先处理pagedir，这样将要被evict的页再被线程访问的时候会fault，之后进入activate_page等待frame_lock，
+      实现了只要一个页被选中要驱逐，对其的访问都会被阻塞*/
     pagedir_clear_page(fe->t->pagedir, fe->upage);
     bool dirty = pagedir_is_dirty(fe->t->pagedir, fe->upage);
 
