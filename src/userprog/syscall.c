@@ -378,7 +378,6 @@ static void sys_mmap(struct intr_frame *f)
   int fd = *(int *)(f->esp + sizeof(uint32_t));
   check_read(f->esp + 2 * sizeof(uint32_t), sizeof(char *));
   void *upage = *(char **)(f->esp + 2 * sizeof(uint32_t));
-
   if (upage == NULL || (uint32_t)upage % PGSIZE != 0 || fd <= 1)
   {
     f->eax = -1;
@@ -387,11 +386,10 @@ static void sys_mmap(struct intr_frame *f)
 
   struct thread *t = thread_current();
   struct file *file = NULL;
+  uint32_t file_l, offset;
 
   lock_acquire(&filesys_lock);
   struct file_ *f_ = fd_to_file_(fd);
-  uint32_t file_l;
-  uint32_t offset;
   if (f_)
   {
     ASSERT(f_->f != NULL);
@@ -407,7 +405,6 @@ static void sys_mmap(struct intr_frame *f)
   lock_acquire(&filesys_lock);
   file_l = file_length(file);
   lock_release(&filesys_lock);
-
   if (file_l == 0)
   {
     f->eax = -1;
@@ -417,29 +414,26 @@ static void sys_mmap(struct intr_frame *f)
   // 不能和已有的upage冲突
   for (offset = 0; offset < file_l; offset += PGSIZE)
   {
-    if (spt_lookup(t, (int8_t *)upage + offset) != NULL)
+    if (lookup_in_tspt(t, (int8_t *)upage + offset) != NULL)
     {
       f->eax = -1;
       return;
     }
   }
 
-  uint32_t read_bytes = file_l;
-  uint32_t zero_bytes = (uint32_t)pg_round_up((void *)read_bytes) - read_bytes;
-  uint32_t ofs = 0;
-
+  uint32_t read_bytes, zero_bytes, ofs = 0;
+  read_bytes = file_l;
+  zero_bytes = (uint32_t)pg_round_up((void *)read_bytes) - read_bytes;
   while (read_bytes > 0 || zero_bytes > 0)
   {
     /* Calculate how to fill this page.
-       We will read PAGE_READ_BYTES bytes from FILE
-       and zero the final PAGE_ZERO_BYTES bytes. */
+       read PAGE_READ_BYTES bytes and zero the final PAGE_ZERO_BYTES bytes. */
     size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
     void *vaddr = (uint8_t *)upage + ofs;
+
     struct spt_entry *spte;
-
     spte = (struct spt_entry *)malloc(sizeof(struct spt_entry));
-
     spte->upage = vaddr;
     spte->status = LAZY_LOAD;
     spte->file = file;
@@ -460,19 +454,21 @@ static void sys_mmap(struct intr_frame *f)
     zero_bytes -= page_zero_bytes;
   }
 
-  /* 3. Assign mmapid */
-  mmapid id = 0;
+  mmap_id id = 0;
   if (!list_empty(&t->mmap_list))
   {
-    id = list_entry(list_back(&t->mmap_list), struct mmap_list_entry, elem)->id + 1;
+    struct mmap_entry *temp;
+    temp = list_entry(list_back(&t->mmap_list), struct mmap_entry, elem);
+    id = temp->id + 1;
   }
 
-  struct mmap_list_entry *mle = (struct mmap_list_entry *)malloc(sizeof(struct mmap_list_entry));
-  mle->id = id;
-  mle->file = file;
-  mle->f_size = file_l;
-  mle->upage = upage;
-  list_push_back(&t->mmap_list, &mle->elem);
+  struct mmap_entry *me;
+  me = (struct mmap_entry *)malloc(sizeof(struct mmap_entry));
+  me->id = id;
+  me->file = file;
+  me->f_size = file_l;
+  me->upage = upage;
+  list_push_back(&t->mmap_list, &me->elem);
 
   f->eax = id;
   return;
@@ -481,7 +477,7 @@ static void sys_mmap(struct intr_frame *f)
 static void sys_munmap(struct intr_frame *f)
 {
   check_read(f->esp + sizeof(uint32_t), sizeof(int));
-  mmapid id = *(int *)(f->esp + sizeof(uint32_t));
+  mmap_id id = *(int *)(f->esp + sizeof(uint32_t));
   lock_acquire(&frame_lock);
   munmap_id(id);
   lock_release(&frame_lock);

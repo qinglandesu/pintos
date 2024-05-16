@@ -15,10 +15,10 @@
 
 static struct hash frame_hash_table;
 
-static struct lock swap_lock;      /*swap的锁 */
+static struct lock swap_lock;      /*保护swap_block的锁 */
 static struct block *swap_block;   /* swap的block*/
-static struct bitmap *swap_bitmap; /* swap的bitmap*/
-static size_t swap_maxnum;
+static struct bitmap *swap_bitmap; /* swap slot占用状态的bitmap*/
+static size_t swap_maxnum;         /* swap的最大页数量 */
 
 void frame_init()
 {
@@ -26,6 +26,7 @@ void frame_init()
     hash_init(&frame_hash_table, frame_hash_func, frame_less_func, NULL);
 }
 
+/* 分配一个物理帧kpage并将其关联到一个frame table(必须持有frame_lock) */
 void *get_frame(enum palloc_flags flag, void *upage)
 {
     ASSERT(lock_held_by_current_thread(&frame_lock));
@@ -40,18 +41,17 @@ void *get_frame(enum palloc_flags flag, void *upage)
     if (fe == NULL)
     {
         palloc_free_page(kpage);
-        PANIC("malloc failed in get_frame()\n");
         return NULL;
     }
     fe->t = thread_current();
     fe->kpage = kpage;
     fe->upage = upage;
-    fe->pinned = true;
     hash_insert(&frame_hash_table, &fe->elem);
 
     return kpage;
 }
 
+/* 释放一个物理帧kpage并从frame table中删除对应的条目(必须持有frame_lock) */
 void free_frame(void *kpage)
 {
     ASSERT(lock_held_by_current_thread(&frame_lock));
@@ -60,7 +60,7 @@ void free_frame(void *kpage)
     frame_table_remove(kpage);
 }
 
-/* 仅从fht删掉并free kpage对应的fhte */
+/* 从frame table删除对应的条目,并free kpage对应的frame_entry(必须持有frame_lock) */
 void frame_table_remove(void *kpage)
 {
     ASSERT(lock_held_by_current_thread(&frame_lock));
@@ -69,12 +69,12 @@ void frame_table_remove(void *kpage)
     struct frame_entry temp;
     temp.kpage = kpage;
     struct hash_elem *h = hash_find(&frame_hash_table, &temp.elem);
-    struct frame_entry *fhte = hash_entry(h, struct frame_entry, elem);
-    hash_delete(&frame_hash_table, &fhte->elem);
-    free(fhte);
+    struct frame_entry *fe = hash_entry(h, struct frame_entry, elem);
+    hash_delete(&frame_hash_table, &fe->elem);
+    free(fe);
 }
 
-/* 在process将要退出时调用，根据spt清除fhte、并根据spt状态对具体物理页进行操作 */
+/* 在进程退出时调用，清除补充页表spt中的帧条目(必须持有frame_lock) */
 void free_frame_on_exit()
 {
     ASSERT(lock_held_by_current_thread(&frame_lock));
@@ -90,11 +90,9 @@ void free_frame_on_exit()
         {
         case IN_USE:
             ASSERT(spte->kpage != NULL);
-            // process_exit会根据pagdir来palloc_free_page
             frame_table_remove(spte->kpage);
             break;
         case SWAPPED_OUT:
-            // swap_out的时候已经删了fhte
             ASSERT(spte->kpage == NULL);
             swap_free(spte->swap_index);
             break;
@@ -110,30 +108,12 @@ void free_frame_on_exit()
     }
 }
 
-/* 必须持有frame_lock */
-void frame_unpin(void *kpage)
-{
-    ASSERT(lock_held_by_current_thread(&frame_lock));
-
-    struct frame_entry temp;
-    temp.kpage = kpage;
-    struct hash_elem *h = hash_find(&frame_hash_table, &(temp.elem));
-    if (h == NULL)
-    {
-        PANIC("The frame to be unpinned does not exist");
-    }
-
-    struct frame_entry *f;
-    f = hash_entry(h, struct frame_entry, elem);
-    f->pinned = false; // unpin.
-}
-
 /* 向spt添加条目 */
-bool spt_add_page(struct thread *t, void *upage, enum page_status status, void *kpage)
+bool spt_add_page(struct thread *t, void *upage,
+                  enum page_status status, void *kpage)
 {
     ASSERT((uint32_t)upage % PGSIZE == 0);
     struct spt_entry *spte;
-    // spt通过hash_destroy()来free spte
     spte = (struct spt_entry *)malloc(sizeof(struct spt_entry));
     if (status != IN_USE)
     {
@@ -150,8 +130,8 @@ bool spt_add_page(struct thread *t, void *upage, enum page_status status, void *
     spte->swap_index = INT32_MAX;
     spte->file = NULL;
     spte->offset = INT32_MAX;
-    spte->read_bytes = INT32_MAX;
-    spte->zero_bytes = INT32_MAX;
+    spte->read_bytes = 0;
+    spte->zero_bytes = PGSIZE;
     if (hash_insert(t->spt, &spte->elem) == NULL)
     {
         // hash_insert没有重复条目时return NULL，此时成功插入
@@ -160,13 +140,13 @@ bool spt_add_page(struct thread *t, void *upage, enum page_status status, void *
     else // spt已经有相同条目
     {
         free(spte);
-        PANIC("already has same entry in spt\n");
+        PANIC("same entry in spt\n");
         return false;
     }
 }
 
 /* 在thread t->spt中寻找页，如果失败则返回NULL */
-struct spt_entry *spt_lookup(struct thread *t, void *upage)
+struct spt_entry *lookup_in_tspt(struct thread *t, void *upage)
 {
     struct hash *spt = t->spt;
     struct spt_entry temp;
@@ -175,30 +155,22 @@ struct spt_entry *spt_lookup(struct thread *t, void *upage)
     return e != NULL ? hash_entry(e, struct spt_entry, elem) : NULL;
 }
 
-/* 依据thread t->spt, 激活一个not exist的页, 向页表添加条目*/
+/* 依据thread t->spt，激活一个页，并向页表添加条目(必须持有frame_lock)*/
 bool activate_page(struct thread *t, void *upage)
 {
-    lock_acquire(&frame_lock);
+    ASSERT(lock_held_by_current_thread(&frame_lock));
     uint32_t *pagedir = t->pagedir;
-    struct spt_entry *spte;
-    spte = spt_lookup(t, upage);
+    struct spt_entry *spte = lookup_in_tspt(t, upage);
     if (spte == NULL) // spt中没有该条目
-    {
-        PANIC("activating a page not in spt");
         return false;
-    }
-    void *kpage;
-    if (!(kpage = get_frame(PAL_USER, upage))) // 需要腾出空间
+    void *kpage = get_frame(PAL_USER, upage);
+    if (!(kpage)) // 需要腾出空间
     {
-        page_daemon();
+        page_evict();
         kpage = get_frame(PAL_USER, upage);
     }
-    if (!kpage)
-    {
-        PANIC("can't get frame\n");
-    }
+    ASSERT(kpage);
 
-    bool filesys_lock_held = true;
     switch (spte->status)
     {
     case IN_USE:
@@ -206,55 +178,41 @@ bool activate_page(struct thread *t, void *upage)
         break;
     case DEMAND_ZERO:
         memset(kpage, 0, PGSIZE);
+        if (!pagedir_get_page(t->pagedir, upage))
+            pagedir_set_page(pagedir, upage, kpage, spte->writable);
         break;
     case SWAPPED_OUT:
         swap_in(spte->swap_index, kpage);
+        if (!pagedir_get_page(t->pagedir, upage))
+            pagedir_set_page(pagedir, upage, kpage, spte->writable);
+        pagedir_set_dirty(t->pagedir, upage, true);
         break;
     case LAZY_LOAD:
         if (spte->read_bytes > 0)
         {
-            // filesys_lock_held = lock_held_by_current_thread(&filesys_lock);
-            // ASSERT(!filesys_lock_held);
-            // 有可能是在read过程中触发page_fault到这里的
-            if (!filesys_lock_held) // 暂时在这里完全不获取这个锁
-            {
-                lock_acquire(&filesys_lock);
-            }
             file_seek(spte->file, spte->offset);
             uint32_t read_bytes = 0;
             while (read_bytes < spte->read_bytes)
             {
-                read_bytes += file_read(spte->file, (uint8_t *)kpage + read_bytes, spte->read_bytes - read_bytes);
-            }
-            if (!filesys_lock_held)
-            {
-                lock_release(&filesys_lock);
+                read_bytes += file_read(spte->file,
+                                        (uint8_t *)kpage + read_bytes,
+                                        spte->read_bytes - read_bytes);
             }
             memset((int8_t *)kpage + read_bytes, 0, spte->zero_bytes);
         }
-        else
-        {
+        else // read_bytes是零可能是DEMAND_ZERO之后被驱逐的干净页
             memset(kpage, 0, spte->zero_bytes);
-        }
+        if (!pagedir_get_page(t->pagedir, upage))
+            pagedir_set_page(pagedir, upage, kpage, spte->writable);
         break;
     default:
-        PANIC("spte not being properly initialized\n");
+        PANIC("unknown status of spte\n");
         break;
     }
-    if (pagedir_get_page(t->pagedir, upage))
-    {
-        PANIC("upage %p in pagedir has been occupied\n", upage);
-    }
-    if (!pagedir_set_page(pagedir, upage, kpage, spte->writable))
-    {
-        PANIC("pagedir_set_page failed");
-    }
+
     spte->status = IN_USE;
     spte->kpage = kpage;
     spte->swap_index = INT32_MAX;
-    pagedir_set_dirty(pagedir, kpage, false);
-    frame_unpin(kpage);
-    lock_release(&frame_lock);
 
     return true;
 }
@@ -272,7 +230,7 @@ void swap_init()
     bitmap_set_all(swap_bitmap, false);
 }
 
-/* 把kpage放到swap block里 */
+/* 把kpage放到swap_block里 */
 uint32_t swap_out(void *kpage)
 {
     lock_acquire(&swap_lock);
@@ -320,47 +278,146 @@ void swap_free(uint32_t index)
     lock_release(&swap_lock);
 }
 
-/* swap_out一个页，并处理spt、fht、pagedir(必须持有frame_lock) */
-void page_daemon()
+/* evict一个页，处理spt、fht、pagedir(必须持有frame_lock) */
+void page_evict()
 {
     ASSERT(lock_held_by_current_thread(&frame_lock));
     size_t n = hash_size(&frame_hash_table);
     static unsigned prng = 1;
     struct frame_entry *fe;
-    while (true)
-    {
-        prng = prng * 1664525u + 1013904223u;
-        size_t pointer = prng % n;
 
-        struct hash_iterator it;
-        hash_first(&it, &frame_hash_table);
-        size_t i;
-        for (i = 0; i <= pointer; ++i)
-            hash_next(&it);
-
-        fe = hash_entry(hash_cur(&it), struct frame_entry, elem);
-        if (fe->pinned) // is pinned
-        {
-            printf("pinned, continue\n");
-            continue;
-        }
-        else // unpinned. evict it!
-            break;
-    }
+    /*选择一个随机的frame*/
+    prng = prng * 1664525u + 1013904223u;
+    size_t pointer = prng % n;
+    struct hash_iterator it;
+    hash_first(&it, &frame_hash_table);
+    for (size_t i = 0; i <= pointer; ++i)
+        hash_next(&it);
+    fe = hash_entry(hash_cur(&it), struct frame_entry, elem);
 
     /*先处理pagedir，这样将要被evict的页所属的线程再访问这个页的时候会fault，
     之后进入activate_page等待frame_lock，实现了只要一个页被选中要驱逐，对其的访问都会被阻塞*/
     pagedir_clear_page(fe->t->pagedir, fe->upage);
-    uint32_t index = swap_out(fe->kpage);
+    bool dirty = pagedir_is_dirty(fe->t->pagedir, fe->upage);
 
     // 处理spt
-    struct spt_entry *spte = spt_lookup(fe->t, fe->upage);
-    ASSERT(spte);
-    spte->status = SWAPPED_OUT;
-    spte->kpage = NULL;
-    spte->swap_index = index;
-
+    if (dirty)
+    {
+        uint32_t index = swap_out(fe->kpage);
+        struct spt_entry *spte = lookup_in_tspt(fe->t, fe->upage);
+        ASSERT(spte);
+        spte->kpage = NULL;
+        spte->status = SWAPPED_OUT;
+        spte->swap_index = index;
+    }
+    else
+    {
+        struct spt_entry *spte = lookup_in_tspt(fe->t, fe->upage);
+        ASSERT(spte);
+        spte->kpage = NULL;
+        spte->status = LAZY_LOAD;
+    }
     free_frame(fe->kpage);
+}
+
+/* 根据mmap_id取消映射内存映射区域,写回文件,并从mmap_list中移除mmap_entry */
+void munmap_id(mmap_id id)
+{
+    ASSERT(lock_held_by_current_thread(&frame_lock));
+    struct thread *t = thread_current();
+    struct mmap_entry *me = mid_to_me(id);
+    ASSERT(me != NULL);
+    ASSERT(me->file != NULL)
+
+    uint32_t offset;
+    uint32_t file_size = me->f_size;
+    for (offset = 0; offset < file_size; offset += PGSIZE)
+    {
+        void *upage = (int8_t *)me->upage + offset;
+        struct spt_entry *spte = lookup_in_tspt(t, upage);
+        ASSERT(spte != NULL)
+        uint32_t bytes_write;
+        switch (spte->status)
+        {
+        case IN_USE:
+            ASSERT(spte->kpage != NULL);             // 确认在内存里
+            if (pagedir_is_dirty(t->pagedir, upage)) // 不dirty不用写回
+            {
+                lock_acquire(&filesys_lock);
+                file_seek(me->file, offset);
+                bytes_write = 0;
+                while (bytes_write < spte->read_bytes)
+                {
+                    bytes_write += file_write(me->file,
+                                              (int8_t *)upage + bytes_write,
+                                              spte->read_bytes - bytes_write);
+                }
+                lock_release(&filesys_lock);
+            }
+            pagedir_clear_page(t->pagedir, upage);
+            free_frame(spte->kpage);
+            break;
+        case SWAPPED_OUT: // swap出去的一定dirty
+            activate_page(t, spte->upage);
+            ASSERT(spte->status == IN_USE);
+            ASSERT(spte->kpage != NULL);
+            lock_acquire(&filesys_lock);
+            file_seek(me->file, offset);
+            bytes_write = 0;
+            while (bytes_write < spte->read_bytes)
+            {
+                bytes_write += file_write(me->file,
+                                          (int8_t *)upage + bytes_write,
+                                          spte->read_bytes - bytes_write);
+            }
+            lock_release(&filesys_lock);
+            pagedir_clear_page(t->pagedir, upage);
+            free_frame(spte->kpage);
+            break;
+        case DEMAND_ZERO:
+        case LAZY_LOAD:
+            break; // 什么也不用管
+        default:
+            PANIC("unknown status of spte");
+        }
+        // 处理spt
+        hash_delete(t->spt, &spte->elem);
+    }
+    lock_acquire(&filesys_lock);
+    file_close(me->file);
+    lock_release(&filesys_lock);
+    list_remove(&me->elem);
+    free(me);
+}
+
+/* 进程退出时取消映射所有内存映射区域 */
+void munmap_on_exit()
+{
+    ASSERT(lock_held_by_current_thread(&frame_lock));
+    struct thread *t = thread_current();
+    mmap_id id;
+    while (!list_empty(&t->mmap_list))
+    {
+        id = list_entry(list_front(&t->mmap_list),
+                        struct mmap_entry, elem)
+                 ->id;
+        munmap_id(id);
+    }
+}
+
+/* 寻找当前thread的mmap_id对应的mmap_entry，没找到返回NULL */
+struct mmap_entry *mid_to_me(mmap_id id)
+{
+    struct thread *t = thread_current();
+    struct list_elem *e = list_begin(&t->mmap_list);
+    while (e != list_end(&t->child_list))
+    {
+        struct mmap_entry *me = list_entry(e, struct mmap_entry, elem);
+        if (me->id == id)
+            return me;
+        e = list_next(e);
+    }
+    return NULL;
 }
 
 unsigned frame_hash_func(const struct hash_elem *elem, void *aux UNUSED)

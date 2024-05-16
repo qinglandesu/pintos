@@ -156,7 +156,7 @@ page_fault(struct intr_frame *f)
    if (not_present)
    {
       // 先activate一下试试
-      if (spt_lookup(t, pg_round_down(fault_addr)))
+      if (lookup_in_tspt(t, pg_round_down(fault_addr)))
       {
          lock_acquire(&frame_lock);
          if (activate_page(t, pg_round_down(fault_addr)))
